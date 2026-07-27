@@ -1,5 +1,6 @@
 credentials.json
 .env
+jira.env
 .venv/
 __pycache__/
 *.pyc
@@ -12,3 +13,9 @@ data/gold/*
 !data/bronze/.gitkeep
 !data/silver/.gitkeep
 !data/gold/.gitkeep
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
