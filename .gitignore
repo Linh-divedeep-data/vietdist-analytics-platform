@@ -1,6 +1,7 @@
 credentials.json
 .env
 jira.env
+raw_data/
 .venv/
 __pycache__/
 *.pyc
