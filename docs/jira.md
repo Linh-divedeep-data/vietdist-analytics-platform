@@ -192,6 +192,7 @@ Trước khi đóng bất kỳ Story nào thuộc nhóm này, xác nhận đủ:
 - Tạo issue theo đúng thứ tự phân cấp: **Epic trước** → lấy issue key → **Story** (gắn `parent` = Epic key) → lấy issue key → **Subtask** (gắn `parent` = Story key).
 - Nếu 1 issue tạo lỗi (vd: sai field, thiếu quyền, trùng key...): **dừng lại ngay**, báo lỗi cụ thể (issue nào, lỗi gì), **không tiếp tục tạo các issue con** của issue lỗi đó, và không tự ý bỏ qua để tạo tiếp phần khác.
 - **Riêng subtask migration DB:** nếu test rollback (down script) thất bại ở staging, dừng toàn bộ epic đang chứa subtask đó, không tạo/tiếp tục các issue liên quan đến deploy production cho tới khi vấn đề được xác nhận đã xử lý.
+- **KHÔNG HTML-escape** `title`/`summary`/`description` trước khi gọi tool tạo issue. Jira lưu các field này dạng plain text, không tự decode HTML entity — nếu text đi qua bước escape (`html.escape()`, template engine auto-escape mặc định...) trước khi gửi, ký tự `&`/`<`/`>`/`"`/`'` sẽ bị lưu literal thành `&amp;`/`&lt;`/`&gt;`/`&quot;`/`&#39;` trong Jira thật, phải sửa tay sau bằng `jira set <KEY> summary <value>`. Nếu dùng template/string-building có auto-escape, tắt escape cho các field này trước khi gọi API.
 
 ---
 
