@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "vietdist_analytics_platform",
+  "project_id": "96fd470c-03f4-4e39-aee5-79df6387cffb"
+}
