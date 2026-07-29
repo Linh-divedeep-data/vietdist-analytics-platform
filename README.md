@@ -9,6 +9,37 @@ Chào mừng bạn đến với **Capstone Project** của khóa học Python & 
 
 ---
 
+## 🏁 Bắt đầu nhanh (Getting Started)
+
+**Yêu cầu trước:** Python >= 3.11, [uv](https://docs.astral.sh/uv/getting-started/installation/) đã cài (`uv --version` để kiểm tra).
+
+Setup và chạy pipeline lần đầu trên máy local:
+
+```bash
+# 1. Clone repo
+git clone git@github.com:Linh-divedeep-data/vietdist-analytics-platform.git
+cd vietdist-analytics-platform
+
+# 2. Tạo file .env từ template
+cp .env.example .env
+```
+
+3. Mở file `.env` vừa tạo, điền `GOOGLE_SERVICE_ACCOUNT_JSON` trỏ tới đường dẫn file `credentials.json` (Service Account key do Admin/DE cấp — **không commit file này lên git**, đã bị chặn sẵn trong `.gitignore`).
+
+```bash
+# 4. Cài dependency qua uv
+uv sync
+
+# 5. Chạy pipeline
+uv run main.py --layer all --run-date YYYY-MM-DD
+```
+
+Thay `YYYY-MM-DD` bằng ngày muốn chạy (vd `2026-07-30`). Lệnh chạy xong sẽ in log ra console, mỗi dòng gắn cùng 1 `batch_id` cho lần chạy đó.
+
+> **Lưu ý (Phase 0 hiện tại):** `--layer`/`--run-date` chưa được `main.py` xử lý thật (argparse + logic từng layer là các subtask kế tiếp) — 2 tham số này hiện bị bỏ qua, lệnh chỉ sinh `batch_id` và log 2 dòng start/finish. Cú pháp trên là cú pháp CLI cuối cùng của dự án, dùng ngay từ bây giờ để khỏi phải đổi lệnh sau này.
+
+---
+
 ## 📌 Khuyến nghị quan trọng về Github Repository
 Mặc dù bạn có thể viết code dự án này chung với các bài tập thực hành hàng ngày của khóa học, **bạn có thể:**
 👉 **TẠO MỘT GITHUB REPOSITORY RIÊNG BIỆT** chỉ dành cho dự án VietDist.
