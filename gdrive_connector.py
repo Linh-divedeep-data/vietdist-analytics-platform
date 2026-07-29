@@ -1,5 +1,6 @@
 import io
 import os
+
 from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -44,18 +45,23 @@ def list_files_in_folder(folder_id):
     return results.get("files", [])
 
 def download_file(file_id, file_name, destination_folder="data/raw"):
-    """
-    TODO: HỌC VIÊN TỰ VIẾT CODE CHO HÀM NÀY
-    
-    Yêu cầu:
-    1. Kiểm tra xem thư mục `destination_folder` đã tồn tại chưa, nếu chưa thì tạo mới (dùng os.makedirs).
-    2. Gọi Google Drive API (sử dụng đối tượng `drive_service` ở trên) để lấy luồng dữ liệu của file (get_media).
-    3. Dùng thư viện `io.FileIO` và `MediaIoBaseDownload` để tải từng chunk dữ liệu về và lưu thành file vật lý trên máy tính.
-    4. Trả về đường dẫn tuyệt đối hoặc tương đối của file vừa tải.
-    
-    Gợi ý: Tìm kiếm từ khóa "Google Drive API python download file get_media" trên Google.
-    """
-    pass
+    """Tải 1 file từ Google Drive về destination_folder, trả về đường dẫn file đã tải."""
+    os.makedirs(destination_folder, exist_ok=True)
+    file_path = os.path.join(destination_folder, file_name)
+
+    request = drive_service.files().get_media(fileId=file_id)
+    try:
+        with io.FileIO(file_path, "wb") as fh:
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+    except Exception:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
+
+    return file_path
 
 if __name__ == "__main__":
     # Đây là FOLDER_ID chứa dữ liệu gốc của dự án VietDist
