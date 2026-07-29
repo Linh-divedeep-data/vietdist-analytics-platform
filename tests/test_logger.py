@@ -1,21 +1,7 @@
 import logging
 import re
 
-import pytest
-
 from src.logger import get_logger
-
-
-@pytest.fixture(autouse=True)
-def reset_shared_logger():
-    logger = logging.getLogger("vdap_pipeline")
-    logger.handlers.clear()
-    logger.setLevel(logging.NOTSET)
-    logger.propagate = True
-    yield
-    logger.handlers.clear()
-    logger.setLevel(logging.NOTSET)
-    logger.propagate = True
 
 
 def test_default_level_is_info():
