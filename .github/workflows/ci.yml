@@ -21,5 +21,13 @@ jobs:
         continue-on-error: true # placeholder job — repo not ruff-clean yet, don't hard-fail CI
         run: uvx ruff check .
 
-      - name: Test (placeholder)
-        run: echo "No tests yet — placeholder step, replace with 'uv run pytest' once test_pipeline.py exists"
+      - name: Test collection (pytest --collect-only)
+        run: |
+          uv run pytest --collect-only
+          code=$?
+          # exit 5 = "no tests collected" (OK while tests/ is empty); any other
+          # non-zero code (e.g. 2 = import/collection error) must fail CI.
+          if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then
+            exit 0
+          fi
+          exit "$code"
