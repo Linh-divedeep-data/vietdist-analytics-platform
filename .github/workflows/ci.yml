@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Lint (ruff)
+        continue-on-error: true # placeholder job — repo not ruff-clean yet, don't hard-fail CI
+        run: uvx ruff check .
+
+      - name: Test collection (pytest --collect-only)
+        run: |
+          uv run pytest --collect-only && code=0 || code=$?
+          # exit 5 = "no tests collected" (OK while tests/ is empty); any other
+          # non-zero code (e.g. 2 = import/collection error) must fail CI.
+          # `&&`/`||` here (not a bare `code=$?` on the next line) is required:
+          # GitHub Actions runs steps under `bash -e`, so a bare non-zero exit
+          # would abort the script before `code=$?` ever executes.
+          if [ "$code" -eq 0 ] || [ "$code" -eq 5 ]; then
+            exit 0
+          fi
+          exit "$code"
