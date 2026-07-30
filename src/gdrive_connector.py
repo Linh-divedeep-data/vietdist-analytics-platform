@@ -15,6 +15,11 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 # Ví dụ trong .env: GOOGLE_SERVICE_ACCOUNT_JSON=credentials.json
 SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "credentials.json")
 
+# FOLDER_ID chứa dữ liệu gốc của dự án VietDist — lấy từ .env, không hardcode
+# (khác môi trường dev/prod cần trỏ tới folder khác nhau)
+# Ví dụ trong .env: GDRIVE_FOLDER_ID=your_google_drive_folder_id_here
+FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
+
 def get_drive_service():
     """Khởi tạo và trả về đối tượng service để gọi Google Drive API."""
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
@@ -64,9 +69,9 @@ def download_file(file_id, file_name, destination_folder="data/raw"):
     return file_path
 
 if __name__ == "__main__":
-    # Đây là FOLDER_ID chứa dữ liệu gốc của dự án VietDist
-    FOLDER_ID = "1or8Z1cuL8pkcRypbv3odkMbhAgpje_lr"
-    
+    if not FOLDER_ID:
+        raise RuntimeError("GDRIVE_FOLDER_ID chưa được set trong .env")
+
     print("Dang lay danh sach file...")
     files = list_files_in_folder(FOLDER_ID)
     
