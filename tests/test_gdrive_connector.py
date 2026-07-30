@@ -48,7 +48,7 @@ class FailingDownloader:
 
 
 def test_download_file_creates_destination_folder_and_writes_content(tmp_path, monkeypatch):
-    import gdrive_connector
+    from src import gdrive_connector
 
     fake_service = FakeDriveService()
     monkeypatch.setattr(gdrive_connector, "drive_service", fake_service)
@@ -67,7 +67,7 @@ def test_download_file_creates_destination_folder_and_writes_content(tmp_path, m
 
 
 def test_download_file_calls_get_media_with_correct_file_id(tmp_path, monkeypatch):
-    import gdrive_connector
+    from src import gdrive_connector
 
     fake_service = FakeDriveService()
     monkeypatch.setattr(gdrive_connector, "drive_service", fake_service)
@@ -81,7 +81,7 @@ def test_download_file_calls_get_media_with_correct_file_id(tmp_path, monkeypatc
 
 
 def test_download_file_removes_partial_file_on_download_error(tmp_path, monkeypatch):
-    import gdrive_connector
+    from src import gdrive_connector
 
     fake_service = FakeDriveService()
     monkeypatch.setattr(gdrive_connector, "drive_service", fake_service)
