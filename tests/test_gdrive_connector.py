@@ -1,3 +1,4 @@
+import importlib
 import os
 
 import pytest
@@ -95,3 +96,68 @@ def test_download_file_removes_partial_file_on_download_error(tmp_path, monkeypa
 
     expected_path = os.path.join(destination_folder, "SRC01_sales_transactions.csv")
     assert not os.path.exists(expected_path)
+
+
+def test_folder_id_validation_raises_regardless_of_import_or_main(monkeypatch):
+    """Module-level validation must fire on import, not just inside __main__."""
+    import dotenv
+
+    from src import gdrive_connector
+
+    original_value = gdrive_connector.FOLDER_ID
+    monkeypatch.delenv("GDRIVE_FOLDER_ID", raising=False)
+    # load_dotenv() would otherwise silently refill GDRIVE_FOLDER_ID from the
+    # real .env on reload (it fills in vars *absent* from os.environ) - patch
+    # the real dotenv.load_dotenv so `from dotenv import load_dotenv` re-binds
+    # to this no-op when the module re-executes its imports on reload.
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: None)
+    try:
+        with pytest.raises(RuntimeError, match="GDRIVE_FOLDER_ID"):
+            importlib.reload(gdrive_connector)
+    finally:
+        monkeypatch.setenv("GDRIVE_FOLDER_ID", original_value)
+        importlib.reload(gdrive_connector)
+
+
+def test_list_files_in_folder_follows_pagination(monkeypatch):
+    from src import gdrive_connector
+
+    page1 = {
+        "files": [{"id": "1", "name": "a.csv", "mimeType": "text/csv"}],
+        "nextPageToken": "TOKEN2",
+    }
+    page2 = {"files": [{"id": "2", "name": "b.csv", "mimeType": "text/csv"}]}
+
+    class FakeExecuteResult:
+        def __init__(self, data):
+            self._data = data
+
+        def execute(self):
+            return self._data
+
+    class FakeFilesResource:
+        def __init__(self):
+            self.page_tokens_requested = []
+
+        def list(self, q, fields, pageToken=None):
+            self.page_tokens_requested.append(pageToken)
+            page = page1 if pageToken is None else page2
+            return FakeExecuteResult(page)
+
+    class FakeDriveService:
+        def __init__(self):
+            self.files_resource = FakeFilesResource()
+
+        def files(self):
+            return self.files_resource
+
+    fake_service = FakeDriveService()
+    monkeypatch.setattr(gdrive_connector, "drive_service", fake_service)
+
+    result = gdrive_connector.list_files_in_folder("folder-x")
+
+    assert result == [
+        {"id": "1", "name": "a.csv", "mimeType": "text/csv"},
+        {"id": "2", "name": "b.csv", "mimeType": "text/csv"},
+    ]
+    assert fake_service.files_resource.page_tokens_requested == [None, "TOKEN2"]
