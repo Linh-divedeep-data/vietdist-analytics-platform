@@ -1,5 +1,6 @@
 # src/extract.py
 import os
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -42,6 +43,21 @@ def read_excel_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
         raise ImportError(
             "Thiếu engine đọc Excel. Chạy `uv add fastexcel` rồi thử lại."
         ) from e
+
+
+def attach_lineage(df: pl.DataFrame, source_file: str, run_date: str, batch_id: str) -> pl.DataFrame:
+    """Gắn 5 cột metadata lineage bắt buộc của Bronze (xem CLAUDE.md).
+
+    _ingested_at lấy tại thời điểm gọi hàm này — mỗi nguồn stamp thời gian
+    riêng, chính xác hơn 1 timestamp dùng chung cho cả batch.
+    """
+    return df.with_columns(
+        pl.lit(source_file).alias("_source_file"),
+        pl.lit("google_drive").alias("_source_platform"),
+        pl.lit(run_date).alias("_run_date"),
+        pl.lit(datetime.now(UTC)).alias("_ingested_at"),
+        pl.lit(batch_id).alias("_batch_id"),
+    )
 
 
 def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:

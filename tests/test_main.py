@@ -15,6 +15,8 @@ def mock_download_all_sources(monkeypatch):
     import main as main_module
 
     monkeypatch.setattr(main_module.extract, "download_all_sources", lambda folder_id, batch_id: [])
+    monkeypatch.setattr(main_module.extract, "read_csv_sources", lambda raw_dir="data/raw": {})
+    monkeypatch.setattr(main_module.extract, "read_excel_sources", lambda raw_dir="data/raw": {})
 
 
 def test_main_returns_valid_uuid_batch_id():
@@ -57,3 +59,30 @@ def test_main_calls_download_all_sources_with_folder_id_and_batch_id(monkeypatch
     batch_id = main()
 
     assert calls == [(main_module.gdrive_connector.FOLDER_ID, batch_id)]
+
+
+def test_main_attaches_lineage_to_every_source_with_shared_batch_id(monkeypatch):
+    import main as main_module
+    from main import main
+
+    monkeypatch.setattr(main_module.extract, "read_csv_sources", lambda raw_dir="data/raw": {
+        "fake1.csv": "df-csv-1",
+        "fake2.csv": "df-csv-2",
+    })
+    monkeypatch.setattr(main_module.extract, "read_excel_sources", lambda raw_dir="data/raw": {
+        "fake1.xlsx": "df-xlsx-1",
+        "fake2.xlsx": "df-xlsx-2",
+    })
+
+    attach_calls = []
+    monkeypatch.setattr(
+        main_module.extract,
+        "attach_lineage",
+        lambda df, source_file, run_date, batch_id: attach_calls.append((df, source_file, run_date, batch_id)),
+    )
+
+    batch_id = main()
+
+    assert len(attach_calls) == 4
+    assert {call[1] for call in attach_calls} == {"fake1.csv", "fake2.csv", "fake1.xlsx", "fake2.xlsx"}
+    assert all(call[3] == batch_id for call in attach_calls)
