@@ -1,6 +1,25 @@
 # src/extract.py
+import os
+
+import polars as pl
+
 from src import gdrive_connector
+from src.constants import CSV_SOURCES
 from src.logger import get_logger
+
+
+def read_csv_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
+    """Đọc 4 nguồn CSV từ raw_dir thành Polars DataFrame, key theo tên file.
+
+    infer_schema_length=0: ép toàn bộ cột thành String ngay lúc đọc, tránh
+    ComputeError khi dòng sau không khớp kiểu được suy luận từ vài dòng đầu
+    (nguyên tắc fail-safe ingestion của Bronze — xem CLAUDE.md).
+    File thiếu/hỏng không được bắt lỗi ở đây — raise tự nhiên lên caller.
+    """
+    return {
+        name: pl.read_csv(os.path.join(raw_dir, name), infer_schema_length=0)
+        for name in CSV_SOURCES
+    }
 
 
 def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
