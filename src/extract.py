@@ -60,6 +60,15 @@ def attach_lineage(df: pl.DataFrame, source_file: str, run_date: str, batch_id: 
     )
 
 
+def cast_to_string(df: pl.DataFrame) -> pl.DataFrame:
+    """Ép toàn bộ cột thành String — bắt buộc trước khi ghi Bronze (CLAUDE.md).
+
+    attach_lineage() để lại _ingested_at kiểu Datetime; bước này đóng lại
+    invariant all-String của Bronze trước khi ghi Parquet.
+    """
+    return df.select(pl.all().cast(pl.String))
+
+
 def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
     """Tải toàn bộ file trong 1 folder Drive về data/raw.
 

@@ -17,6 +17,7 @@ def mock_download_all_sources(monkeypatch):
     monkeypatch.setattr(main_module.extract, "download_all_sources", lambda folder_id, batch_id: [])
     monkeypatch.setattr(main_module.extract, "read_csv_sources", lambda raw_dir="data/raw": {})
     monkeypatch.setattr(main_module.extract, "read_excel_sources", lambda raw_dir="data/raw": {})
+    monkeypatch.setattr(main_module.extract, "cast_to_string", lambda df: df)
 
 
 def test_main_returns_valid_uuid_batch_id():
@@ -78,11 +79,36 @@ def test_main_attaches_lineage_to_every_source_with_shared_batch_id(monkeypatch)
     monkeypatch.setattr(
         main_module.extract,
         "attach_lineage",
-        lambda df, source_file, run_date, batch_id: attach_calls.append((df, source_file, run_date, batch_id)),
+        lambda df, source_file, run_date, batch_id: attach_calls.append((df, source_file, run_date, batch_id))
+        or f"lineage-{source_file}",
     )
+    monkeypatch.setattr(main_module.extract, "cast_to_string", lambda df: df)
 
     batch_id = main()
 
     assert len(attach_calls) == 4
     assert {call[1] for call in attach_calls} == {"fake1.csv", "fake2.csv", "fake1.xlsx", "fake2.xlsx"}
     assert all(call[3] == batch_id for call in attach_calls)
+
+
+def test_main_casts_each_lineage_attached_dataframe_to_string(monkeypatch):
+    import main as main_module
+    from main import main
+
+    monkeypatch.setattr(main_module.extract, "read_csv_sources", lambda raw_dir="data/raw": {
+        "fake1.csv": "df-csv-1",
+        "fake2.csv": "df-csv-2",
+    })
+    monkeypatch.setattr(main_module.extract, "read_excel_sources", lambda raw_dir="data/raw": {})
+    monkeypatch.setattr(
+        main_module.extract,
+        "attach_lineage",
+        lambda df, source_file, run_date, batch_id: f"lineage-{source_file}",
+    )
+
+    cast_calls = []
+    monkeypatch.setattr(main_module.extract, "cast_to_string", lambda df: cast_calls.append(df) or df)
+
+    main()
+
+    assert set(cast_calls) == {"lineage-fake1.csv", "lineage-fake2.csv"}

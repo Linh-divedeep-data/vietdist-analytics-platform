@@ -279,6 +279,30 @@ def test_attach_lineage_stamps_ingested_at_per_call():
     assert second["_ingested_at"].to_list()[0] is not None
 
 
+def test_cast_to_string_converts_non_string_lineage_column():
+    from src import extract
+
+    df = pl.DataFrame({"order_id": ["1", "2"]})
+    lineage_df = extract.attach_lineage(df, source_file="a.csv", run_date="2026-07-31", batch_id="batch-1")
+    assert lineage_df["_ingested_at"].dtype != pl.String
+
+    result = extract.cast_to_string(lineage_df)
+
+    assert all(dtype == pl.String for dtype in result.dtypes)
+
+
+def test_cast_to_string_leaves_already_string_dataframe_unchanged():
+    from src import extract
+
+    df = pl.DataFrame({"order_id": ["1", "2"], "amount": ["100", "200"]})
+
+    result = extract.cast_to_string(df)
+
+    assert all(dtype == pl.String for dtype in result.dtypes)
+    assert result["order_id"].to_list() == ["1", "2"]
+    assert result["amount"].to_list() == ["100", "200"]
+
+
 def test_download_all_sources_does_not_log_on_success(monkeypatch, capsys):
     from src import extract
 
