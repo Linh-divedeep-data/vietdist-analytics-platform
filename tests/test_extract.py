@@ -1,5 +1,6 @@
 import os
 
+import polars as pl
 import pytest
 
 pytestmark = pytest.mark.skipif(
@@ -125,6 +126,49 @@ def test_download_all_sources_logs_error_via_get_logger_on_failure(monkeypatch, 
     assert "[batch_id=test-batch-123]" in out
     assert "SRC02_sales_target_plan.xlsx" in out
     assert "simulated download failure" in out
+
+
+def test_read_csv_sources_returns_dataframe_per_csv_source_with_matching_row_count(tmp_path):
+    from src import extract
+
+    (tmp_path / "SRC01_sales_transactions.csv").write_text("order_id,amount\n1,100\n2,200\n")
+    (tmp_path / "SRC03_customer_master.csv").write_text("customer_id,name\n1,A\n")
+    (tmp_path / "SRC06_distributor_master.csv").write_text("distributor_id,name\n1,B\n2,C\n3,D\n")
+    (tmp_path / "SRC09_return_transactions.csv").write_text("return_id,amount\n1,10\n")
+
+    dataframes = extract.read_csv_sources(raw_dir=str(tmp_path))
+
+    assert set(dataframes.keys()) == {
+        "SRC01_sales_transactions.csv",
+        "SRC03_customer_master.csv",
+        "SRC06_distributor_master.csv",
+        "SRC09_return_transactions.csv",
+    }
+    assert dataframes["SRC01_sales_transactions.csv"].height == 2
+    assert dataframes["SRC03_customer_master.csv"].height == 1
+    assert dataframes["SRC06_distributor_master.csv"].height == 3
+    assert dataframes["SRC09_return_transactions.csv"].height == 1
+
+
+def test_read_csv_sources_reads_all_columns_as_string(tmp_path):
+    from src import extract
+
+    (tmp_path / "SRC01_sales_transactions.csv").write_text("order_id,amount\n1,100\n2,200\n")
+    (tmp_path / "SRC03_customer_master.csv").write_text("customer_id,name\n1,A\n")
+    (tmp_path / "SRC06_distributor_master.csv").write_text("distributor_id,name\n1,B\n2,C\n3,D\n")
+    (tmp_path / "SRC09_return_transactions.csv").write_text("return_id,amount\n1,10\n")
+
+    dataframes = extract.read_csv_sources(raw_dir=str(tmp_path))
+
+    for df in dataframes.values():
+        assert all(dtype == pl.String for dtype in df.dtypes)
+
+
+def test_read_csv_sources_raises_on_missing_file(tmp_path):
+    from src import extract
+
+    with pytest.raises(FileNotFoundError):
+        extract.read_csv_sources(raw_dir=str(tmp_path))
 
 
 def test_download_all_sources_does_not_log_on_success(monkeypatch, capsys):
