@@ -226,6 +226,18 @@ def test_read_excel_sources_raises_on_missing_file(tmp_path):
         extract.read_excel_sources(raw_dir=str(tmp_path))
 
 
+def test_read_excel_sources_raises_clear_error_when_engine_missing(tmp_path, monkeypatch):
+    from src import extract
+
+    def fake_read_excel(*args, **kwargs):
+        raise ImportError("fastexcel not found")
+
+    monkeypatch.setattr(extract.pl, "read_excel", fake_read_excel)
+
+    with pytest.raises(ImportError, match="uv add fastexcel"):
+        extract.read_excel_sources(raw_dir=str(tmp_path))
+
+
 def test_download_all_sources_does_not_log_on_success(monkeypatch, capsys):
     from src import extract
 
