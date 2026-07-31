@@ -238,6 +238,47 @@ def test_read_excel_sources_raises_clear_error_when_engine_missing(tmp_path, mon
         extract.read_excel_sources(raw_dir=str(tmp_path))
 
 
+def test_attach_lineage_adds_all_5_metadata_columns_with_correct_values():
+    from src import extract
+
+    df = pl.DataFrame({"order_id": ["1", "2"], "amount": ["100", "200"]})
+
+    result = extract.attach_lineage(
+        df, source_file="SRC01_sales_transactions.csv", run_date="2026-07-31", batch_id="abc-123"
+    )
+
+    assert result["_source_file"].to_list() == ["SRC01_sales_transactions.csv", "SRC01_sales_transactions.csv"]
+    assert result["_source_platform"].to_list() == ["google_drive", "google_drive"]
+    assert result["_run_date"].to_list() == ["2026-07-31", "2026-07-31"]
+    assert result["_batch_id"].to_list() == ["abc-123", "abc-123"]
+    assert result["_ingested_at"].null_count() == 0
+
+
+def test_attach_lineage_preserves_original_columns_and_rows():
+    from src import extract
+
+    df = pl.DataFrame({"order_id": ["1", "2"], "amount": ["100", "200"]})
+
+    result = extract.attach_lineage(
+        df, source_file="SRC01_sales_transactions.csv", run_date="2026-07-31", batch_id="abc-123"
+    )
+
+    assert result["order_id"].to_list() == ["1", "2"]
+    assert result["amount"].to_list() == ["100", "200"]
+
+
+def test_attach_lineage_stamps_ingested_at_per_call():
+    from src import extract
+
+    df = pl.DataFrame({"order_id": ["1"]})
+
+    first = extract.attach_lineage(df, source_file="a.csv", run_date="2026-07-31", batch_id="batch-1")
+    second = extract.attach_lineage(df, source_file="a.csv", run_date="2026-07-31", batch_id="batch-1")
+
+    assert first["_ingested_at"].to_list()[0] is not None
+    assert second["_ingested_at"].to_list()[0] is not None
+
+
 def test_download_all_sources_does_not_log_on_success(monkeypatch, capsys):
     from src import extract
 
