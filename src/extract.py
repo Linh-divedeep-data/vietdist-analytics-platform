@@ -4,7 +4,7 @@ import os
 import polars as pl
 
 from src import gdrive_connector
-from src.constants import CSV_SOURCES
+from src.constants import CSV_SOURCES, EXCEL_SOURCES
 from src.logger import get_logger
 
 
@@ -19,6 +19,20 @@ def read_csv_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
     return {
         name: pl.read_csv(os.path.join(raw_dir, name), infer_schema_length=0)
         for name in CSV_SOURCES
+    }
+
+
+def read_excel_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
+    """Đọc 6 nguồn Excel từ raw_dir thành Polars DataFrame, key theo tên file.
+
+    pl.read_excel không có infer_schema_length=0 như read_csv, nên ép String
+    bằng .cast(pl.String) sau khi đọc — cùng nguyên tắc fail-safe ingestion
+    của Bronze (xem CLAUDE.md). File thiếu/hỏng không được bắt lỗi ở đây —
+    raise tự nhiên lên caller.
+    """
+    return {
+        name: pl.read_excel(os.path.join(raw_dir, name)).select(pl.all().cast(pl.String))
+        for name in EXCEL_SOURCES
     }
 
 
