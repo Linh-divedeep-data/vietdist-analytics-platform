@@ -29,11 +29,19 @@ def read_excel_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
     bằng .cast(pl.String) sau khi đọc — cùng nguyên tắc fail-safe ingestion
     của Bronze (xem CLAUDE.md). File thiếu/hỏng không được bắt lỗi ở đây —
     raise tự nhiên lên caller.
+
+    Thiếu engine đọc Excel (fastexcel) raise ImportError sâu bên trong Polars
+    internals, khó hiểu — bắt lại và raise rõ ràng kèm hướng dẫn cài đặt.
     """
-    return {
-        name: pl.read_excel(os.path.join(raw_dir, name)).select(pl.all().cast(pl.String))
-        for name in EXCEL_SOURCES
-    }
+    try:
+        return {
+            name: pl.read_excel(os.path.join(raw_dir, name)).select(pl.all().cast(pl.String))
+            for name in EXCEL_SOURCES
+        }
+    except ImportError as e:
+        raise ImportError(
+            "Thiếu engine đọc Excel. Chạy `uv add fastexcel` rồi thử lại."
+        ) from e
 
 
 def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
