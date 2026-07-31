@@ -171,6 +171,61 @@ def test_read_csv_sources_raises_on_missing_file(tmp_path):
         extract.read_csv_sources(raw_dir=str(tmp_path))
 
 
+def test_read_excel_sources_returns_dataframe_per_excel_source_with_matching_row_count(tmp_path):
+    from src import extract
+
+    pl.DataFrame({"target_id": ["1", "2"], "amount": ["100", "200"]}).write_excel(
+        tmp_path / "SRC02_sales_target_plan.xlsx"
+    )
+    pl.DataFrame({"product_id": ["1"], "name": ["A"]}).write_excel(tmp_path / "SRC04_product_master.xlsx")
+    pl.DataFrame({"order_id": ["1", "2", "3"]}).write_excel(tmp_path / "SRC05_distributor_orders.xlsx")
+    pl.DataFrame({"employee_id": ["1"]}).write_excel(tmp_path / "SRC07_employee_master.xlsx")
+    pl.DataFrame({"territory_id": ["1", "2"]}).write_excel(tmp_path / "SRC08_territory_mapping.xlsx")
+    pl.DataFrame({"promo_id": ["1"]}).write_excel(tmp_path / "SRC10_promotion_program.xlsx")
+
+    dataframes = extract.read_excel_sources(raw_dir=str(tmp_path))
+
+    assert set(dataframes.keys()) == {
+        "SRC02_sales_target_plan.xlsx",
+        "SRC04_product_master.xlsx",
+        "SRC05_distributor_orders.xlsx",
+        "SRC07_employee_master.xlsx",
+        "SRC08_territory_mapping.xlsx",
+        "SRC10_promotion_program.xlsx",
+    }
+    assert dataframes["SRC02_sales_target_plan.xlsx"].height == 2
+    assert dataframes["SRC04_product_master.xlsx"].height == 1
+    assert dataframes["SRC05_distributor_orders.xlsx"].height == 3
+    assert dataframes["SRC07_employee_master.xlsx"].height == 1
+    assert dataframes["SRC08_territory_mapping.xlsx"].height == 2
+    assert dataframes["SRC10_promotion_program.xlsx"].height == 1
+
+
+def test_read_excel_sources_reads_all_columns_as_string(tmp_path):
+    from src import extract
+
+    pl.DataFrame({"target_id": [1, 2], "amount": [100.5, 200.5]}).write_excel(
+        tmp_path / "SRC02_sales_target_plan.xlsx"
+    )
+    pl.DataFrame({"product_id": [1], "name": ["A"]}).write_excel(tmp_path / "SRC04_product_master.xlsx")
+    pl.DataFrame({"order_id": [1, 2, 3]}).write_excel(tmp_path / "SRC05_distributor_orders.xlsx")
+    pl.DataFrame({"employee_id": [1]}).write_excel(tmp_path / "SRC07_employee_master.xlsx")
+    pl.DataFrame({"territory_id": [1, 2]}).write_excel(tmp_path / "SRC08_territory_mapping.xlsx")
+    pl.DataFrame({"promo_id": [1]}).write_excel(tmp_path / "SRC10_promotion_program.xlsx")
+
+    dataframes = extract.read_excel_sources(raw_dir=str(tmp_path))
+
+    for df in dataframes.values():
+        assert all(dtype == pl.String for dtype in df.dtypes)
+
+
+def test_read_excel_sources_raises_on_missing_file(tmp_path):
+    from src import extract
+
+    with pytest.raises(FileNotFoundError):
+        extract.read_excel_sources(raw_dir=str(tmp_path))
+
+
 def test_download_all_sources_does_not_log_on_success(monkeypatch, capsys):
     from src import extract
 

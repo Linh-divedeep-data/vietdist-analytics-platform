@@ -12,3 +12,12 @@ CSV_SOURCES = [
     "SRC06_distributor_master.csv",
     "SRC09_return_transactions.csv",
 ]
+
+EXCEL_SOURCES = [
+    "SRC02_sales_target_plan.xlsx",
+    "SRC04_product_master.xlsx",
+    "SRC05_distributor_orders.xlsx",
+    "SRC07_employee_master.xlsx",
+    "SRC08_territory_mapping.xlsx",
+    "SRC10_promotion_program.xlsx",
+]
