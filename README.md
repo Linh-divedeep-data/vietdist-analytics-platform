@@ -31,12 +31,12 @@ cp .env.example .env
 uv sync
 
 # 5. Chạy pipeline
-uv run main.py --layer all --run-date YYYY-MM-DD
+uv run python -m src.main --layer all --run-date YYYY-MM-DD
 ```
 
 Thay `YYYY-MM-DD` bằng ngày muốn chạy (vd `2026-07-30`). Lệnh chạy xong sẽ in log ra console, mỗi dòng gắn cùng 1 `batch_id` cho lần chạy đó.
 
-> **Lưu ý (Phase 0 hiện tại):** `--layer`/`--run-date` chưa được `main.py` xử lý thật (argparse + logic từng layer là các subtask kế tiếp) — 2 tham số này hiện bị bỏ qua, lệnh chỉ sinh `batch_id` và log 2 dòng start/finish. Cú pháp trên là cú pháp CLI cuối cùng của dự án, dùng ngay từ bây giờ để khỏi phải đổi lệnh sau này.
+> **Lưu ý (Phase 1 hiện tại):** `--layer bronze`/`all` chạy thật (download + ghi `data/bronze/<run_date>/` partitioned + `ingest_log.parquet`). `--layer silver`/`gold` mới log "chưa implement" (Phase 2/3 chưa code).
 
 ---
 
@@ -82,6 +82,9 @@ Nếu bạn tạo Repo mới, đây là cấu trúc thư mục tiêu chuẩn mà
 ```text
 vietdist-lakehouse/
 │
+├── config/
+│   └── sources.py           # Danh sách SRC01-SRC10 (CSV_SOURCES, EXCEL_SOURCES)
+│
 ├── data/
 │   ├── raw/                 # Chứa file vật lý tải từ Google Drive
 │   ├── bronze/              # Chứa file Parquet (Nguyên bản)
@@ -89,18 +92,20 @@ vietdist-lakehouse/
 │   └── gold/                # Chứa file Parquet (Star Schema)
 │
 ├── src/
-│   ├── extract.py           # Gọi API Google Drive (Dùng gdrive_connector)
-│   ├── transform_silver.py  # Code dọn dẹp data
-│   └── transform_gold.py    # Code join data tạo báo cáo
+│   ├── main.py              # CLI tự động chạy toàn bộ pipeline
+│   ├── gdrive_connector.py  # Gọi API Google Drive
+│   ├── logger.py
+│   └── extract/
+│       ├── parser.py        # Đọc CSV/XLSX, tải file từ Drive
+│       └── lineage.py       # Gắn 5 cột metadata lineage, ép String
 │
 ├── tests/
-│   └── test_pipeline.py     # Code Pytest kiểm tra dữ liệu
+│   └── test_*.py            # Code Pytest kiểm tra dữ liệu
 │
 ├── credentials.json         # KHÔNG PUSH LÊN GITHUB
 ├── .env                     # KHÔNG PUSH LÊN GITHUB
 ├── .gitignore               # Đã chặn credentials.json và .env
-├── pyproject.toml           # Quản lý thư viện qua lệnh `uv`
-└── main.py                  # CLI tự động chạy toàn bộ pipeline
+└── pyproject.toml           # Quản lý thư viện qua lệnh `uv`
 ```
 
 Hãy click vào **[Phase 1](phase1_bronze_ingestion.md)** để bắt đầu nhiệm vụ đầu tiên khi bạn kết thúc Tuần 2 nhé. Chúc bạn code thật "cháy"! 🔥

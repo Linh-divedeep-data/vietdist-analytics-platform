@@ -5,40 +5,54 @@ import pytest
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists("credentials.json"),
-    reason="main.py imports src.extract, which imports src.gdrive_connector "
+    reason="src.main imports src.extract, which imports src.gdrive_connector "
     "(eagerly authenticates on import, not present in CI)",
 )
 
+BRONZE_ARGV = ["--layer", "bronze", "--run-date", "2026-08-01"]
+
 
 @pytest.fixture(autouse=True)
-def mock_download_all_sources(monkeypatch):
-    import main as main_module
+def mock_pipeline_calls(monkeypatch):
+    import src.main as main_module
 
     monkeypatch.setattr(main_module.extract, "download_all_sources", lambda folder_id, batch_id: [])
-    monkeypatch.setattr(main_module.extract, "read_csv_sources", lambda raw_dir="data/raw": {})
-    monkeypatch.setattr(main_module.extract, "read_excel_sources", lambda raw_dir="data/raw": {})
-    monkeypatch.setattr(main_module.extract, "cast_to_string", lambda df: df)
+    monkeypatch.setattr(main_module.extract, "run_bronze_ingestion", lambda run_date, batch_id: [])
+
+
+def test_main_requires_layer_and_run_date():
+    from src.main import main
+
+    with pytest.raises(SystemExit):
+        main([])
+
+
+def test_main_rejects_invalid_layer_choice():
+    from src.main import main
+
+    with pytest.raises(SystemExit):
+        main(["--layer", "unknown", "--run-date", "2026-08-01"])
 
 
 def test_main_returns_valid_uuid_batch_id():
-    from main import main
+    from src.main import main
 
-    batch_id = main()
+    batch_id = main(BRONZE_ARGV)
     assert uuid.UUID(batch_id)
 
 
 def test_main_generates_new_batch_id_each_call():
-    from main import main
+    from src.main import main
 
-    first = main()
-    second = main()
+    first = main(BRONZE_ARGV)
+    second = main(BRONZE_ARGV)
     assert first != second
 
 
 def test_main_logs_carry_the_same_batch_id(capsys):
-    from main import main
+    from src.main import main
 
-    batch_id = main()
+    batch_id = main(BRONZE_ARGV)
     out = capsys.readouterr().out
     lines = [line for line in out.splitlines() if line.strip()]
     assert len(lines) >= 2
@@ -46,9 +60,9 @@ def test_main_logs_carry_the_same_batch_id(capsys):
         assert f"[batch_id={batch_id}]" in line
 
 
-def test_main_calls_download_all_sources_with_folder_id_and_batch_id(monkeypatch):
-    import main as main_module
-    from main import main
+def test_main_calls_download_all_sources_with_folder_id_and_batch_id_for_bronze_layer(monkeypatch):
+    import src.main as main_module
+    from src.main import main
 
     calls = []
     monkeypatch.setattr(
@@ -57,58 +71,55 @@ def test_main_calls_download_all_sources_with_folder_id_and_batch_id(monkeypatch
         lambda folder_id, batch_id: calls.append((folder_id, batch_id)) or [],
     )
 
-    batch_id = main()
+    batch_id = main(BRONZE_ARGV)
 
     assert calls == [(main_module.gdrive_connector.FOLDER_ID, batch_id)]
 
 
-def test_main_attaches_lineage_to_every_source_with_shared_batch_id(monkeypatch):
-    import main as main_module
-    from main import main
+def test_main_calls_run_bronze_ingestion_with_run_date_and_batch_id(monkeypatch):
+    import src.main as main_module
+    from src.main import main
 
-    monkeypatch.setattr(main_module.extract, "read_csv_sources", lambda raw_dir="data/raw": {
-        "fake1.csv": "df-csv-1",
-        "fake2.csv": "df-csv-2",
-    })
-    monkeypatch.setattr(main_module.extract, "read_excel_sources", lambda raw_dir="data/raw": {
-        "fake1.xlsx": "df-xlsx-1",
-        "fake2.xlsx": "df-xlsx-2",
-    })
-
-    attach_calls = []
+    calls = []
     monkeypatch.setattr(
         main_module.extract,
-        "attach_lineage",
-        lambda df, source_file, run_date, batch_id: attach_calls.append((df, source_file, run_date, batch_id))
-        or f"lineage-{source_file}",
+        "run_bronze_ingestion",
+        lambda run_date, batch_id: calls.append((run_date, batch_id)) or [],
     )
-    monkeypatch.setattr(main_module.extract, "cast_to_string", lambda df: df)
 
-    batch_id = main()
+    batch_id = main(BRONZE_ARGV)
 
-    assert len(attach_calls) == 4
-    assert {call[1] for call in attach_calls} == {"fake1.csv", "fake2.csv", "fake1.xlsx", "fake2.xlsx"}
-    assert all(call[3] == batch_id for call in attach_calls)
+    assert calls == [("2026-08-01", batch_id)]
 
 
-def test_main_casts_each_lineage_attached_dataframe_to_string(monkeypatch):
-    import main as main_module
-    from main import main
+def test_main_skips_bronze_calls_for_silver_layer(monkeypatch):
+    import src.main as main_module
+    from src.main import main
 
-    monkeypatch.setattr(main_module.extract, "read_csv_sources", lambda raw_dir="data/raw": {
-        "fake1.csv": "df-csv-1",
-        "fake2.csv": "df-csv-2",
-    })
-    monkeypatch.setattr(main_module.extract, "read_excel_sources", lambda raw_dir="data/raw": {})
+    download_calls = []
+    ingestion_calls = []
     monkeypatch.setattr(
-        main_module.extract,
-        "attach_lineage",
-        lambda df, source_file, run_date, batch_id: f"lineage-{source_file}",
+        main_module.extract, "download_all_sources", lambda folder_id, batch_id: download_calls.append(1) or []
+    )
+    monkeypatch.setattr(
+        main_module.extract, "run_bronze_ingestion", lambda run_date, batch_id: ingestion_calls.append(1) or []
     )
 
-    cast_calls = []
-    monkeypatch.setattr(main_module.extract, "cast_to_string", lambda df: cast_calls.append(df) or df)
+    main(["--layer", "silver", "--run-date", "2026-08-01"])
 
-    main()
+    assert download_calls == []
+    assert ingestion_calls == []
 
-    assert set(cast_calls) == {"lineage-fake1.csv", "lineage-fake2.csv"}
+
+def test_main_runs_bronze_calls_for_all_layer(monkeypatch):
+    import src.main as main_module
+    from src.main import main
+
+    download_calls = []
+    monkeypatch.setattr(
+        main_module.extract, "download_all_sources", lambda folder_id, batch_id: download_calls.append(1) or []
+    )
+
+    main(["--layer", "all", "--run-date", "2026-08-01"])
+
+    assert download_calls == [1]

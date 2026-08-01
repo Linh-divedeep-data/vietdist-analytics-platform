@@ -1,30 +1,31 @@
-# src/extract.py
+# src/extract/parser.py
 import os
-from datetime import UTC, datetime
 
 import polars as pl
 
+from config.sources import CSV_SOURCES, EXCEL_SOURCES
 from src import gdrive_connector
-from src.constants import CSV_SOURCES, EXCEL_SOURCES
 from src.logger import get_logger
 
 
-def read_csv_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
-    """Đọc 4 nguồn CSV từ raw_dir thành Polars DataFrame, key theo tên file.
+def read_csv_source(name: str, raw_dir: str = "data/raw") -> pl.DataFrame:
+    """Đọc 1 nguồn CSV từ raw_dir thành Polars DataFrame.
 
     infer_schema_length=0: ép toàn bộ cột thành String ngay lúc đọc, tránh
     ComputeError khi dòng sau không khớp kiểu được suy luận từ vài dòng đầu
     (nguyên tắc fail-safe ingestion của Bronze — xem CLAUDE.md).
     File thiếu/hỏng không được bắt lỗi ở đây — raise tự nhiên lên caller.
     """
-    return {
-        name: pl.read_csv(os.path.join(raw_dir, name), infer_schema_length=0)
-        for name in CSV_SOURCES
-    }
+    return pl.read_csv(os.path.join(raw_dir, name), infer_schema_length=0)
 
 
-def read_excel_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
-    """Đọc 6 nguồn Excel từ raw_dir thành Polars DataFrame, key theo tên file.
+def read_csv_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
+    """Đọc toàn bộ 4 nguồn CSV, key theo tên file — xem read_csv_source() cho 1 nguồn."""
+    return {name: read_csv_source(name, raw_dir) for name in CSV_SOURCES}
+
+
+def read_excel_source(name: str, raw_dir: str = "data/raw") -> pl.DataFrame:
+    """Đọc 1 nguồn Excel từ raw_dir thành Polars DataFrame.
 
     pl.read_excel không có infer_schema_length=0 như read_csv, nên ép String
     bằng .cast(pl.String) sau khi đọc — cùng nguyên tắc fail-safe ingestion
@@ -35,38 +36,16 @@ def read_excel_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
     internals, khó hiểu — bắt lại và raise rõ ràng kèm hướng dẫn cài đặt.
     """
     try:
-        return {
-            name: pl.read_excel(os.path.join(raw_dir, name)).select(pl.all().cast(pl.String))
-            for name in EXCEL_SOURCES
-        }
+        return pl.read_excel(os.path.join(raw_dir, name)).select(pl.all().cast(pl.String))
     except ImportError as e:
         raise ImportError(
             "Thiếu engine đọc Excel. Chạy `uv add fastexcel` rồi thử lại."
         ) from e
 
 
-def attach_lineage(df: pl.DataFrame, source_file: str, run_date: str, batch_id: str) -> pl.DataFrame:
-    """Gắn 5 cột metadata lineage bắt buộc của Bronze (xem CLAUDE.md).
-
-    _ingested_at lấy tại thời điểm gọi hàm này — mỗi nguồn stamp thời gian
-    riêng, chính xác hơn 1 timestamp dùng chung cho cả batch.
-    """
-    return df.with_columns(
-        pl.lit(source_file).alias("_source_file"),
-        pl.lit("google_drive").alias("_source_platform"),
-        pl.lit(run_date).alias("_run_date"),
-        pl.lit(datetime.now(UTC)).alias("_ingested_at"),
-        pl.lit(batch_id).alias("_batch_id"),
-    )
-
-
-def cast_to_string(df: pl.DataFrame) -> pl.DataFrame:
-    """Ép toàn bộ cột thành String — bắt buộc trước khi ghi Bronze (CLAUDE.md).
-
-    attach_lineage() để lại _ingested_at kiểu Datetime; bước này đóng lại
-    invariant all-String của Bronze trước khi ghi Parquet.
-    """
-    return df.select(pl.all().cast(pl.String))
+def read_excel_sources(raw_dir: str = "data/raw") -> dict[str, pl.DataFrame]:
+    """Đọc toàn bộ 6 nguồn Excel, key theo tên file — xem read_excel_source() cho 1 nguồn."""
+    return {name: read_excel_source(name, raw_dir) for name in EXCEL_SOURCES}
 
 
 def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
