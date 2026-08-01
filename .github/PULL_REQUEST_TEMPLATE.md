@@ -10,7 +10,7 @@
 
 ## How to Test
 1. `uv run pytest test_pipeline.py` — pass 100%
-2. `uv run main.py --layer <layer> --run-date <date>` chạy không lỗi
+2. `uv run python -m src.main --layer <layer> --run-date <date>` chạy không lỗi
 3. **Idempotency**: chạy lại đúng `--run-date` đó 2 lần, số dòng/số file output không đổi
 4. Đối chiếu Acceptance Criteria trong file phase tương ứng — tick từng mục đã pass
 5. (Silver/Gold) 5 cột metadata lineage vẫn còn nguyên sau transform

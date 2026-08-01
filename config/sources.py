@@ -1,7 +1,7 @@
-# src/constants.py
+# config/sources.py
 """Danh sách nguồn dữ liệu cố định của VDAP (SRC01-SRC10, xem BRD mục 2.2).
 
-Tách riêng khỏi extract.py để logic đọc file (read_csv_sources, sau này
+Tách riêng khỏi src/extract để logic đọc file (read_csv_sources,
 read_excel_sources) không lẫn với danh sách "đọc file nào" — thêm/bớt
 nguồn CSV thì sửa list ở đây, không đụng vào hàm đọc.
 """
