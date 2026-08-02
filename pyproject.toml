@@ -1,0 +1,14 @@
+[project]
+name = "vietdist-analytics-platform"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = [
+    "fastexcel>=0.20.2",
+    "google-api-python-client>=2.198.0",
+    "google-auth-httplib2>=0.4.0",
+    "google-auth-oauthlib>=1.4.0",
+    "polars>=1.43.2",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.2.2",
+]
