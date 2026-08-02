@@ -19,7 +19,7 @@ Giảng viên sẽ cung cấp cho bạn 2 tài nguyên quan trọng để làm b
 
 ## ⚙️ Hướng dẫn Setup ban đầu (Setup Instructions)
 Trước khi code, hãy làm đúng các bước sau để môi trường không bị lỗi:
-1. Đặt file `credentials.json` và `gdrive_connector.py` vào cùng thư mục với file code chính của bạn (VD: `main.py`).
+1. Đặt file `credentials.json` ở thư mục gốc repo (không commit). `gdrive_connector.py` nằm ở `src/gdrive_connector.py`, cùng package với `src/main.py` — không phải file rời ở gốc repo.
 2. **Cực kỳ quan trọng:** Mở file `.gitignore` và thêm dòng `credentials.json` vào. Tuyệt đối không được push file chìa khóa này lên Github!
 3. Mở file `.env`, thêm cấu hình đường dẫn file chìa khóa: `GOOGLE_SERVICE_ACCOUNT_JSON=credentials.json`.
 4. Mở Terminal, cài đặt thư viện Google API bằng lệnh:
@@ -31,35 +31,45 @@ Trước khi code, hãy làm đúng các bước sau để môi trường không
 
 ## 🚀 Nhiệm vụ của bạn (What To Do)
 
-1. **Lấy danh sách file từ Google Drive:**
-   - Dùng hàm `list_files_in_folder(FOLDER_ID)` trong file `gdrive_connector.py` để lấy danh sách toàn bộ file.
+Kiến trúc code **KHÔNG** dồn vào 1 file `extract.py` duy nhất — tách theo package `config/` (khai báo tĩnh) + `src/extract/` (logic ingest, mỗi module 1 trách nhiệm) + `src/extract/unit_of_work/` (logic riêng từng nguồn). Breakdown ticket chi tiết: xem Epic 1 trong `docs/jira_new_structure.md`.
 
-2. **Tải dữ liệu về thư mục cục bộ (Local Download):**
-   - Viết code hoàn thiện hàm `download_file(file_id, file_name)` trong file `gdrive_connector.py` để tải dữ liệu (hàm này hiện đang để trống `TODO`). Hãy đọc kỹ comment gợi ý trong file để biết cách dùng Google Drive API.
-   - Dùng hàm vừa viết để tải toàn bộ 10 file từ Google Drive về thư mục `data/raw/`.
-   - Sử dụng Polars (`pl.read_csv`, `pl.read_excel`) để đọc các file vật lý này từ thư mục `data/raw/` lên thành DataFrame.
-   - Đảm bảo vòng lặp của bạn tải và đọc chính xác 10 file nguồn (từ `SRC01` đến `SRC10`). Có thể dùng hàm `glob.glob()` để lặp qua danh sách file.
+1. **Kết nối + lấy danh sách file từ Google Drive:**
+   - `src/gdrive_connector.py` — `get_drive_service()` (auth bằng Service Account) và `list_files_in_folder(FOLDER_ID)`; phải duyệt hết `nextPageToken` nếu folder có nhiều hơn 1 trang kết quả.
 
-3. **Gắn Metadata (Dấu vết dữ liệu):**
-   - Trước khi lưu vào Data Lake, bạn phải dùng Polars (`with_columns`) để thêm 5 cột sau vào mỗi DataFrame:
-   
+2. **Tải file về `data/raw/`:**
+   - Viết hoàn thiện `download_file(file_id, file_name)` trong `src/gdrive_connector.py` (hàm này để trống `TODO`) bằng `MediaIoBaseDownload`.
+   - `src/extract/parser.py` — `download_all_sources(folder_id, batch_id)` lặp qua danh sách file lấy được ở bước 1, tải cả 10 file về `data/raw/`; 1 file lỗi (network/permission) ghi `status=failed` cho riêng file đó, KHÔNG được crash 9 file còn lại.
+
+3. **Khai báo nguồn + đọc file thành DataFrame theo `unit_of_work`:**
+   - `config/sources.py` — khai báo tĩnh `CSV_SOURCES` (SRC01, SRC03, SRC06, SRC09) và `EXCEL_SOURCES` (SRC02, SRC04, SRC05, SRC07, SRC08, SRC10).
+   - `src/extract/parser.py` — `read_csv_source()` (`pl.read_csv(path, infer_schema_length=0)`) và `read_excel_source()` (`pl.read_excel(path).select(pl.all().cast(pl.String))`) — mỗi hàm chỉ đọc ĐÚNG 1 file, không tự lặp.
+   - `src/extract/unit_of_work/base.py` — `process_source()` dùng chung cho cả 10 nguồn: đọc (qua `read_fn` truyền vào) → gắn lineage (bước 4) → ép String (bước 5) → đo `duration_sec`.
+   - `src/extract/unit_of_work/src01_*.py` .. `src10_*.py` — 10 module, mỗi file chỉ khai `SOURCE_FILE` + `run()` gọi `process_source()` với đúng `read_fn` (CSV hay Excel).
+   - `src/extract/registry.py` — `UNIT_OF_WORK: dict[str, Callable]` map `source_file → run()` tương ứng, đúng 10 entry, khớp `CSV_SOURCES ∪ EXCEL_SOURCES`.
+
+4. **Gắn Metadata (Dấu vết dữ liệu):**
+   - `src/extract/lineage.py` — `attach_lineage(df, source_file, run_date, batch_id)` dùng Polars (`with_columns`) thêm 5 cột sau vào mỗi DataFrame:
+
    | Cột metadata | Kiểu | Mô tả |
    |---|---|---|
    | `_source_file` | TEXT | Tên file gốc, ví dụ: `SRC01_sales_transactions.csv` |
    | `_source_platform` | TEXT | `'google_drive'` |
    | `_run_date` | DATE/TEXT | Ngày chạy pipeline, lấy từ tham số `--run-date` (VD: `'2026-07-22'`) |
-   | `_ingested_at` | TIMESTAMP | Thời điểm ghi file (NOW()) |
-   | `_batch_id` | UUID | ID duy nhất cho mỗi lần chạy pipeline (dùng thư viện `uuid`) |
+   | `_ingested_at` | TIMESTAMP | Thời điểm ghi file (NOW()), stamp tại thời điểm gọi — không dùng chung 1 timestamp cho cả batch |
+   | `_batch_id` | UUID | ID duy nhất cho mỗi lần chạy pipeline (sinh 1 lần ở `main.py`, dùng chung cho cả 10 nguồn) |
 
-4. **Đổ dữ liệu thô vào Bronze Lake (Partitioning & Idempotency):**
-   - Pipeline của bạn không được ghi đè hỏng dữ liệu của ngày hôm trước. Hãy tạo một thư mục con theo tham số ngày chạy: `data/bronze/20260722/`.
-   - Tất cả các cột dữ liệu nên được ép kiểu thành chuỗi (String/VARCHAR) ở lớp này để tránh lỗi sập pipeline (Dùng `pl.all().cast(pl.String)`).
-   - Dùng lệnh `df.write_parquet()` của Polars để ghi mỗi DataFrame thành 1 file `.parquet` vào thư mục của ngày hôm đó (Ví dụ: `data/bronze/20260722/SRC01_sales_transactions.parquet`). 
-   - 💡 **Idempotency**: Việc lưu dữ liệu vào đúng thư mục ngày chạy (yyyymmdd) và ghi đè các file bên trong đảm bảo pipeline có thể chạy lại 100 lần mà không bị nhân bản dữ liệu rác.
+   - Wire `attach_lineage()` vào `unit_of_work/base.py.process_source()`, gọi ngay sau khi đọc — mọi nguồn đi qua đây, không có đường tắt nào bỏ qua bước gắn lineage.
 
-5. **Ghi log vào Data Lake (ingest_log):**
-   - Tạo ra một DataFrame `ingest_log` chứa thông tin các file đã tải: `batch_id`, `source_name`, `source_file`, `source_platform`, `rows_loaded`, `status`, `duration_sec`.
-   - Lưu log này thành file `ingest_log.parquet` nằm CÙNG TRONG thư mục `data/bronze/yyyymmdd/`. Việc này đảm bảo Idempotency thay vì rủi ro nối dài (append) vô tận vào 1 file log duy nhất.
+5. **Đổ dữ liệu thô vào Bronze Lake (Partitioning & Idempotency):**
+   - `src/extract/lineage.py` — `cast_to_string(df)` = `df.select(pl.all().cast(pl.String))`, ép TOÀN BỘ cột (kể cả `_ingested_at`) về String ngay trước khi ghi, để tránh lỗi sập pipeline.
+   - `config/settings.py` — hằng số path `RAW_DIR/BRONZE_DIR/SILVER_DIR/GOLD_DIR` (KHÔNG chứa Drive credentials — `FOLDER_ID`/`SERVICE_ACCOUNT_FILE` giữ inline trong `gdrive_connector.py`).
+   - `src/extract/orchestrator.py` — `run_bronze_ingestion(run_date, batch_id)` lặp qua `registry.UNIT_OF_WORK`, ghi mỗi DataFrame thành 1 file `.parquet` vào thư mục ngày chạy: `data/bronze/20260722/SRC01_sales_transactions.parquet` — ghi đè, không append. 1 nguồn lỗi (đọc/ghi) không được crash cả batch.
+   - 💡 **Idempotency**: Việc lưu dữ liệu vào đúng thư mục ngày chạy (yyyymmdd) và ghi đè file bên trong đảm bảo pipeline chạy lại 100 lần không nhân bản dữ liệu rác.
+
+6. **Ghi log vào Data Lake (ingest_log):**
+   - `src/extract/ingest_log.py` — `build_ingest_log_record(batch_id, source_file, rows_loaded, status, duration_sec, source_platform="google_drive")` dựng 1 dòng log (7 cột: `batch_id, source_name, source_file, source_platform, rows_loaded, status, duration_sec`).
+   - `write_ingest_log(records, bronze_run_dir)` ghi toàn bộ record thành `ingest_log.parquet`, nằm CÙNG TRONG thư mục `data/bronze/yyyymmdd/` — ghi đè, không append, giữ idempotency.
+   - Wire `write_ingest_log()` vào cuối `orchestrator.run_bronze_ingestion()`, chạy sau khi loop xong cả 10 nguồn (dù có nguồn lỗi hay không).
 
 ---
 
@@ -68,6 +78,8 @@ Trước khi code, hãy làm đúng các bước sau để môi trường không
 - [ ] Thư mục `data/raw/` chứa đủ 10 file gốc.
 - [ ] Thư mục `data/bronze/` chứa đủ 11 file `.parquet` (10 file data + 1 file `ingest_log.parquet`).
 - [ ] Dùng lệnh `pl.read_parquet('data/bronze/20260722/SRC01_sales_transactions.parquet')` thấy có đủ 5 cột metadata `_source_file`, `_source_platform`, `_run_date`, `_ingested_at`, `_batch_id`.
+- [ ] `registry.UNIT_OF_WORK` có đúng 10 entry, khớp `config.sources.CSV_SOURCES ∪ EXCEL_SOURCES`.
+- [ ] Rerun cùng `run_date` 2 lần liên tiếp: row count từng file Bronze không đổi (idempotent).
 
 ## 💡 Gợi ý (Hints)
 - Polars đọc file Excel cần thêm một engine ẩn phía sau, nếu báo lỗi thiếu engine, hãy cài thêm `fastexcel` hoặc `xlsx2csv` qua `uv add`.
