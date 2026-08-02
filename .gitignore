@@ -3,6 +3,16 @@ credentials.json
 .env
 jira.env
 
+# Data lake output — keep folder structure (.gitkeep) but never commit data files
+data/raw/*
+data/bronze/*
+data/silver/*
+data/gold/*
+!data/raw/.gitkeep
+!data/bronze/.gitkeep
+!data/silver/.gitkeep
+!data/gold/.gitkeep
+
 # macOS
 .DS_Store
 
