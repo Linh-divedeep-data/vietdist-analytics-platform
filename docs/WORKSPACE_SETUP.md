@@ -96,6 +96,64 @@ openspec init
 
 ---
 
+## C. GitHub CLI (`gh`) — review PR bằng `/review`
+
+```bash
+# Cài (macOS)
+brew install gh
+
+# Đăng nhập — scope tối thiểu "repo" (đọc/ghi PR, review, comment), "workflow" nếu cần xem CI
+gh auth login
+
+# Verify
+gh auth status
+```
+
+Sau khi login: `/review <PR number|URL>` — Claude tự `gh pr diff` lấy nội dung, review, và **post comment thật lên GitHub PR**. Phân biệt với `/code-review`: review diff local/branch hiện tại theo checklist riêng của repo, **không** post lên GitHub — dùng khi tự kiểm tra trước khi mở PR.
+
+---
+
+## D. Jira ↔ bd sync — bắt buộc mỗi session
+
+**Nguyên tắc: 1 task không bao giờ chỉ đóng ở 1 tracker.** bd và Jira phải luôn khớp trạng thái — task xong = Jira tick (chuyển Done/status tương ứng) **và** bd close, làm cùng lúc, không tách rời.
+
+### D.1 Đầu mỗi session — bắt buộc verify kết nối Jira trước khi nhận task
+
+Trước khi bắt đầu làm việc trên bất kỳ task nào chạm Jira/bd, kiểm tra Jira MCP đã kết nối:
+
+```
+getAccessibleAtlassianResources
+```
+
+Nếu lỗi/rỗng → **dừng lại**, báo cho user: "Jira MCP chưa authorize, vào claude.ai → Settings → Connectors để kết nối trước." Không tự đoán trạng thái Jira hay làm việc "mù" (chỉ dựa vào bd) khi chưa xác nhận kết nối được.
+
+### D.2 Setup credential cho CLI (khi cần thao tác Jira ngoài MCP)
+
+```bash
+cp jira.env.example jira.env
+# Điền JIRA_URL, JIRA_EMAIL, JIRA_TOKEN thật (Atlassian API token: id.atlassian.com/manage-profile/security/api-tokens)
+```
+
+`jira.env` **không commit** — thêm vào `.gitignore` nếu chưa có.
+
+### D.3 Đóng 1 task — 2 cách, chọn 1
+
+**Cách A — trong session tương tác (mặc định):** Claude dùng MCP tool `transitionJiraIssue` (chuyển Jira) + lệnh `bd close <id>` (đóng bd) trong cùng 1 turn, không hỏi lại xác nhận riêng lẻ cho từng bước — coi như 1 hành động.
+
+**Cách B — CLI (script, non-interactive hoặc muốn double-check 2 tracker khớp nhau):**
+
+```bash
+uv run python bin/jira/sync_task.py <bd-id> [--jira-status "Done"] [--reason "..."]
+```
+
+Script tự lấy `external_ref` (link Jira) từ bd issue, transition Jira, rồi `bd close` — nếu bước Jira lỗi thì **dừng ngay, không đóng bd** (tránh 2 tracker lệch nhau). Nếu `bd close` lỗi sau khi Jira đã tick, script báo rõ để xử lý tay — không tự động retry mù.
+
+### D.4 Nếu bd không có external_ref (task tạo mới trong bd, chưa có trên Jira)
+
+Không tự suy đoán — hỏi user có cần tạo issue Jira tương ứng (`createJiraIssue`) trước không, hay task này chỉ track nội bộ ở bd (không cần đẩy lên Jira).
+
+---
+
 ## Sau khi xong
 
 1. **Khởi động lại Claude Code / IDE** để nhận plugins, skills, MCP, slash commands.

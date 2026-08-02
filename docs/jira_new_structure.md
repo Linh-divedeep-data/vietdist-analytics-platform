@@ -2,7 +2,9 @@
 
 > Backlog chuẩn hóa để tạo trên **Jira Space MỚI + repo MỚI hoàn toàn** (không phải bản vá cho space/project hiện tại) — dùng file này làm input feed thẳng vào AI để gen issue trên space mới. Toàn bộ link Confluence và issue key `VDAP-xx` xuất hiện trong file là **placeholder/ví dụ định dạng**, không phải link/issue key thật của space cũ — điền lại bằng key project thực tế của space mới sau khi tạo Epic đầu tiên. Điều chỉnh **Sprint 0 → S0.1** và toàn bộ **Epic Phase 1 (Bronze)** theo cấu trúc thư mục mới:
 > `config/{sources.py,settings.py}` + `src/extract/{parser,lineage,registry,orchestrator,ingest_log}.py` + `src/extract/unit_of_work/{base,src01..src10}.py`.
-> Phase 2 (Silver), Phase 3 (Gold + CLI), Phase 3 (Dashboard) **giữ nguyên 100%** nội dung hiện tại — không đổi cấu trúc thư mục nên không cần sửa, chỉ chép nguyên khi tạo Space mới.
+> Phase 2 (Silver), Phase 3 (Gold + CLI), Phase 3 (Dashboard) **giữ nguyên cấu trúc thư mục cũ** (không đổi tên file/module), nhưng đã qua 1 vòng review kỹ thuật (Senior BA + Principal DE góc nhìn) sửa 5 lỗ hổng nghiệp vụ/kỹ thuật thật phát hiện được — xem đánh dấu `_[SỬA]_`/`_[MỚI]_` rải trong Epic 2-4: (1) SCD2 `valid_to` không coalesce với `resign_date` → as-of join gán nhầm nhân viên đã nghỉ việc cho đơn hàng phát sinh sau ngày nghỉ; (2) cột `valid_from` bị thiếu hẳn 1 subtask dù là cột bắt buộc theo CLAUDE.md; (3) Silver ép ngày về 1 format cứng `%Y-%m-%d` trong khi Bronze String-hoá không đồng nhất giữa nguồn CSV (giữ text gốc) và Excel (Polars tự cast) → rủi ro NULL hàng loạt âm thầm; (4) không có validate schema/cột bắt buộc trước khi cast, và test coverage Silver = 0 (chỉ "check thủ công") trong khi đây là tầng nhiều logic nghiệp vụ nhất; (5) `fact_targets` (grain tháng) bị để "hoặc" tùy chọn cách join `dim_date` (grain ngày) thay vì chốt 1 phương án; (6) PII sống tới Gold nhưng Epic Dashboard không có bước rà soát trước khi `.pbix` rời máy cá nhân.
+>
+> **Vòng review thứ 2** (2026-08-02, đối chiếu lại với góc nhìn Principal DE) sửa thêm: (7) đánh số Epic Dashboard trùng "Phase 3" với Epic Gold → đổi đúng thành **Phase 4**; (8) FK không match khi join Fact→Dim chuẩn hóa từ "để NULL" sang **"-1 Unknown Member"** (chuẩn Kimball, tránh Power BI gộp lẫn nhiều lý do lỗi khác nhau vào 1 "blank"); (9) schema-drift validation dời từ Silver lên **Bronze** (fail-fast sớm nhất có thể, `status="schema_mismatch"` riêng trong `ingest_log`), Silver giữ lại làm lớp phòng vệ thứ 2; (10) PII chuyển từ "rà soát tay trước khi share `.pbix`" sang **drop cột PII ngay khi build Gold Dim** (kiểm soát kiến trúc, không phải quy trình — bảo vệ được cả người đọc thẳng file Parquet, không chỉ người mở `.pbix`); (11) thêm retry/backoff cho Google Drive API, exit-code/summary log khi pipeline fail (alerting tối thiểu, kéo từ P4.5 stretch lên core S0.5), quyết định tường minh hoãn partition Gold theo cột, và bổ sung `tests/test_parser.py`/`tests/test_lineage.py` (trước đó Bronze chỉ được test gián tiếp qua `test_unit_of_work.py`). 3 mục nice-to-have (backfill nhiều run_date, data dictionary Gold, rollback Gold build dở dang) ghi nhận ở mục riêng ngay dưới cây tổng hợp, chưa tách Story/Subtask.
 >
 > Format tuân thủ đúng `docs/jira.md` (Bước 3 Epic / Bước 4 Story / Bước 5 Subtask). Tạo issue theo đúng thứ tự phân cấp: **Epic → Story (parent=Epic key) → Subtask (parent=Story key)**. Đừng tạo Subtask trước khi Story cha đã có key. `_[MỚI]_` = nội dung mới hoàn toàn so với Jira gốc, `_[SỬA]_` = có chỉnh sửa, không đánh dấu = giữ nguyên 100%.
 
@@ -14,39 +16,122 @@ Epic: Sprint 0 — Project Setup & DevOps Foundation
 ├── S0.2 Secrets & Environment Config             [giữ nguyên]
 ├── S0.3 CI Pipeline Skeleton                     [giữ nguyên]
 ├── S0.4 Dependency Vulnerability Scan Baseline   [giữ nguyên]
-├── S0.5 Logging & Observability Skeleton         [giữ nguyên]
+├── S0.5 Logging & Observability Skeleton         [SỬA — thêm exit code/alerting tối thiểu]
+│   ├── src/logger.py: trace_id/timestamp/level format
+│   ├── Wire logger into main.py, correlate batch_id as trace_id
+│   └── Exit code + summary log phản ánh pipeline fail (core alerting tối thiểu)   [MỚI]
 ├── S0.6 README Setup Instructions                [giữ nguyên]
 └── S0.7 Branching & Commit Convention            [giữ nguyên]
 
 Epic: Phase 1 — Bronze Data Lake Ingestion         [SỬA TOÀN BỘ — theo package extract/ mới]
-├── P1.1 Google Drive Discovery & Download (US-01)
+├── P1.1 Google Drive Discovery & Download (US-01)   [SỬA — thêm retry/backoff]
 │   ├── Kết nối Google Drive Service Account + list_files_in_folder()   [MỚI]
-│   ├── Implement download_file() qua Drive API
+│   ├── Implement download_file() qua Drive API + retry/backoff   [SỬA]
 │   ├── Loop download toàn bộ 10 SRC vào data/raw/
 │   └── Per-file error handling (status=failed, không crash batch)
-├── P1.2 Read Raw Files theo unit_of_work per source   [SỬA — tách package]
+├── P1.2 Read Raw Files theo unit_of_work per source   [SỬA — tách package + schema validation]
 │   ├── config/sources.py — CSV_SOURCES/EXCEL_SOURCES                   [MỚI vị trí]
 │   ├── extract/parser.py — read_csv_source()/read_excel_source() đơn nguồn
-│   ├── extract/unit_of_work/base.py — process_source() dùng chung      [MỚI]
+│   ├── config/sources.py — REQUIRED_COLUMNS + validate_schema() (fail-fast schema drift)   [MỚI]
+│   ├── extract/unit_of_work/base.py — process_source() dùng chung, gọi validate_schema()      [SỬA]
 │   ├── extract/unit_of_work/src01..src10.py — 10 module per-source     [MỚI]
-│   └── extract/registry.py — UNIT_OF_WORK dict map source→run()        [MỚI]
+│   ├── extract/registry.py — UNIT_OF_WORK dict map source→run()        [MỚI]
+│   └── tests/test_parser.py — unit test read_csv/read_excel/validate_schema độc lập   [MỚI]
 ├── P1.3 Attach Lineage Metadata Columns (US-02)
 │   ├── extract/lineage.py — attach_lineage()
-│   └── Wire attach_lineage() vào unit_of_work/base.py.process_source()
-├── P1.4 Write Bronze Parquet, Idempotent (US-01)   [SỬA — orchestrator.py]
+│   ├── Wire attach_lineage() vào unit_of_work/base.py.process_source()
+│   ├── uuid batch_id sinh 1 lần/run, share qua toàn bộ 10 nguồn
+│   └── tests/test_lineage.py — unit test attach_lineage/cast_to_string độc lập   [MỚI]
+├── P1.4 Write Bronze Parquet, Idempotent (US-01)   [SỬA — orchestrator.py + schema_mismatch status]
 │   ├── extract/lineage.py — cast_to_string()
 │   ├── config/settings.py — RAW_DIR/BRONZE_DIR/SILVER_DIR/GOLD_DIR     [MỚI]
-│   ├── extract/orchestrator.py — run_bronze_ingestion() loop registry  [MỚI]
+│   ├── extract/orchestrator.py — run_bronze_ingestion() loop registry, phân biệt schema_mismatch/failed   [SỬA]
 │   └── Idempotency check: rerun same run_date, row count stable
-└── P1.5 Ingest Log (US-08)
+└── P1.5 Ingest Log (US-08)   [SỬA — thêm status="schema_mismatch"]
     ├── extract/ingest_log.py — build_ingest_log_record()+write_ingest_log()
     ├── Collect rows_loaded/status/duration_sec trong unit_of_work/base.py
     └── Wire write_ingest_log() vào orchestrator.py
 
-Epic: Phase 2 — Silver Data Lake Cleansing                 [GIỮ NGUYÊN]
-Epic: Phase 3 — Gold Star Schema & Production Hardening     [GIỮ NGUYÊN]
-Epic: Phase 3 — Power BI Dashboard & Reporting Layer        [GIỮ NGUYÊN]
+Epic: Phase 2 — Silver Data Lake Cleansing
+├── P2.1 Type Casting — Numeric & Date (US-03)        [SỬA — validate = lớp phòng vệ thứ 2 + date format per-source]
+│   ├── Validate required columns (lớp phòng vệ thứ 2) + mapping format ngày theo từng nguồn   [SỬA]
+│   ├── Strip thousand-separator + cast money/qty cols to Float64/Int64
+│   ├── Cast date columns to pl.Date/Datetime theo format riêng từng nguồn   [SỬA]
+│   └── pytest test_transform_silver.py: verify dtype + format ngày đúng   [SỬA]
+├── P2.2 Text Standardization & Deduplication
+│   ├── Strip+uppercase standardize text columns
+│   ├── Drop duplicate rows in customer_master + other sources
+│   └── Drop/handle rows with NULL customer_id/product_id keys
+├── P2.3 NULL Handling — customer_master.tax_code
+│   └── fill_null("UNKNOWN") on customer_master.tax_code
+└── P2.4 Write Silver Parquet, Idempotent
+    ├── write_parquet mỗi source vào data/silver/<run_date>/
+    └── Idempotency check: rerun same run_date, no duplication/append
+
+Epic: Phase 3 — Gold Star Schema & Production Hardening
+├── P3.1 Dimension Tables (customers/products/distributors/date)   [SỬA — Unknown Member + drop PII]
+│   ├── dim_customers + dim_products build w/ surrogate keys
+│   ├── dim_distributors build w/ surrogate keys
+│   ├── Thêm dòng "Unknown Member" (key = -1) vào mọi Dim   [MỚI]
+│   ├── dim_date generate calendar dimension
+│   └── Drop cột PII khỏi Gold Dim tables (thay vì rà soát tay lúc share)   [MỚI]
+├── P3.2 SCD Type 2 — dim_employees (US-06)          [SỬA — valid_to coalesce resign_date]
+│   ├── Sort by employee_id+effective_date, compute valid_from/valid_to (coalesce resign_date)   [SỬA]
+│   ├── Derive is_current flag   [SỬA]
+│   ├── Generate surrogate employee_key
+│   └── Unit test SCD2 valid_to correctness, gồm case nghỉ việc (small fixture)   [SỬA]
+├── P3.3 Fact Tables — fact_sales/fact_targets        [SỬA — fact_targets grain quyết dứt điểm + Unknown Member]
+│   ├── fact_sales join dim_customers/dim_products/dim_employees(SCD2)/dim_date, left join+fill_null(-1)   [SỬA]
+│   ├── fact_targets join dim_employees (as-of), giữ year/month riêng — KHÔNG ép qua dim_date   [SỬA]
+│   └── Preserve _run_date,_batch_id lineage cols on fact tables
+├── P3.4 fact_returns/fact_distributor_orders + dim_territory/dim_promotion   [SỬA — Unknown Member]
+│   ├── dim_territory + dim_promotion build (+ Unknown Member)   [SỬA]
+│   ├── fact_returns join dims (left join + fill_null(-1))   [SỬA]
+│   └── fact_distributor_orders join dim_distributors/dim_products (left join + fill_null(-1))   [SỬA]
+├── P3.5 Data Mart — mart_sales_vs_target (US-04)
+│   ├── group_by/agg actual vs target revenue by region+month
+│   ├── Compute variance_pct column
+│   └── write_parquet mart_sales_vs_target to data/gold/<run_date>/
+├── P3.6 Lazy Evaluation Refactor
+│   └── Refactor read_parquet→scan_parquet in Silver+Gold modules
+├── P3.7 Pytest — SCD2 + Data Mart logic              [SỬA — thêm case nghỉ việc]
+│   ├── test_mart_sales_vs_target() với fixture nhỏ giả lập
+│   ├── test_scd2_valid_to() kiểm tra valid_to đúng khi đổi vùng VÀ khi nghỉ việc   [SỬA]
+│   └── Wire pytest vào CI pipeline skeleton (cập nhật S0.3)
+└── P3.8 CLI Orchestration (main.py --layer --run-date)
+    ├── argparse setup với --layer,--run-date, validate input
+    ├── Wire --layer=bronze/silver/gold gọi đúng module tương ứng
+    └── Wire --layer=all chạy tuần tự Bronze→Silver→Gold trong 1 lệnh
+
+Epic: Phase 4 — Power BI Dashboard & Reporting Layer   [SỬA — đổi số Phase 3→4, PII giờ chỉ còn xác nhận]
+├── P4.1 Power BI Data Source Connection Setup        [SỬA — PII control chính đã dời sang Gold P3.1]
+│   ├── Connect Power BI to data/gold/<run_date>/ folder, load dim/fact tables
+│   ├── Build relationships in model matching star schema
+│   ├── Parameterize run_date so dashboard refreshes to latest gold folder
+│   └── Xác nhận PII đã bị drop ở Gold (lớp phòng vệ thứ 2, không phải kiểm soát chính)   [SỬA]
+├── P4.2 Dashboard Page: Sales vs Target (US-04)
+│   ├── Matrix/bar visual: actual vs target revenue by region+month
+│   ├── Achievement rate + Variance DAX measures
+│   └── Region/month slicers
+├── P4.3 Dashboard Page: Promotion & Distributor Performance (US-05)
+│   ├── Promotion Uplift/ROI DAX measures + visual
+│   ├── Fill Rate + On-time Delivery % visuals
+│   └── Channel/region filters
+├── P4.4 Dashboard Page: Executive Overview [Stretch]
+│   ├── Total revenue + MoM/YoY growth measures
+│   └── Top 5 region/channel visual
+└── P4.5 Dashboard Page: Data Ops Monitoring [Stretch]
+    ├── Load ingest_log across run_dates
+    └── Pipeline Success Rate + batch status visual
 ```
+
+## Ghi nhận backlog — không chặn, làm sau nếu còn thời gian
+
+_(Từ review Principal DE, mức độ "nice-to-have" — không tạo Story/Subtask riêng ngay, ghi lại để không quên)_
+
+* **Backfill nhiều `run_date` cùng lúc:** CLI (P3.8) hiện chỉ nhận đúng 1 `--run-date`/lần chạy. Muốn nạp lại lịch sử nhiều ngày phải gọi CLI nhiều lần (script ngoài tự loop) — chấp nhận được cho MVP, nâng cấp `--run-date-range` là việc sau.
+* **Data dictionary cho Gold layer:** người đọc dashboard (Marketer/DA) không có tài liệu mô tả ý nghĩa từng cột ở `dim_*`/`fact_*`/`mart_sales_vs_target` ngoài code — nên có 1 file `docs/gold_data_dictionary.md` liệt kê cột + ý nghĩa + đơn vị, làm sau khi Epic 3 Done và schema đã ổn định (làm sớm quá sẽ phải sửa lại nhiều lần).
+* **Rollback khi Gold build fail giữa chừng:** `write_parquet()` từng bảng trong P3.5 (Dim/Fact/Mart) không có transaction — nếu build fail ở bảng thứ 8/12, 7 bảng trước đã ghi thành công nằm lại trong `data/gold/<run_date>/`, tạo Gold folder "nửa vời" (thiếu bảng) mà không có cờ đánh dấu rõ ràng. Rerun cùng `run_date` sẽ ghi đè lại nên tự phục hồi được, nhưng nếu ai đó vô tình dùng Gold folder dở dang trước khi rerun thì dễ hiểu sai. Chấp nhận rủi ro này cho capstone; nếu làm thêm, hướng đơn giản nhất là ghi ra `_tmp` rồi rename cả thư mục khi xong toàn bộ (atomic ở mức filesystem).
 
 ---
 
@@ -208,6 +293,7 @@ Cấu hình credentials/.env (xem S0.2)
 **File(s):** `.git/`
 **Technical Steps:** `git init` → `git add README.md docs/ gdrive_connector.py` (KHÔNG add credentials.json) → `git commit -m "chore: initial commit"`.
 **Acceptance Criteria:** `git log` hiện ít nhất 1 commit; `git status` không báo "not a git repository".
+**💡 Vì sao cần:** Không làm → không có "sổ nhật ký" lưu lịch sử code, code hỏng không sửa lại được, không tạo nhánh/PR được, mọi bước sau (CI, review, sync Jira) đều cần git nên không làm được gì tiếp. Có nó → có nền tảng để lưu, revert, và làm việc nhóm trên code.
 
 #### SUBTASK — Init pyproject.toml + uv add core deps
 
@@ -220,6 +306,7 @@ Cấu hình credentials/.env (xem S0.2)
 **File(s):** `pyproject.toml`
 **Technical Steps:** `uv init` → `uv add polars google-api-python-client google-auth-httplib2 google-auth-oauthlib python-dotenv fastexcel pytest`.
 **Acceptance Criteria:** `uv run python -c "import polars, googleapiclient"` không lỗi.
+**💡 Vì sao cần:** Không làm → mỗi máy cài thư viện tự do, version lệch nhau — kiểu lỗi kinh điển "chạy trên máy tôi thì được mà". Có nó → khóa đúng version thư viện vào file, ai clone repo về cũng cài y hệt, không đoán mò khi có lỗi lạ.
 
 #### SUBTASK — Create data/{raw,bronze,silver,gold}, src/, tests/ skeleton
 
@@ -232,6 +319,7 @@ Cấu hình credentials/.env (xem S0.2)
 **File(s):** thư mục gốc repo.
 **Technical Steps:** `mkdir -p data/{raw,bronze,silver,gold} src tests` + thêm `.gitkeep`.
 **Acceptance Criteria:** `ls data/` hiện đủ 4 thư mục con.
+**💡 Vì sao cần:** Không làm → code ghi file ra thư mục chưa tồn tại, lỗi ngay từ dòng đầu tiên ("No such file or directory") dù logic code đúng. Có nó → khung thư mục có sẵn, chạy code không cần tự tạo thư mục thủ công mỗi lần.
 
 #### SUBTASK — Tạo config/ package + src/extract/ package skeleton  _[MỚI]_
 
@@ -247,6 +335,7 @@ Cấu hình credentials/.env (xem S0.2)
 2. Tạo `__init__.py` rỗng ở mỗi package
 3. Tạo stub file (docstring + `pass`/để trống) cho từng module liệt kê ở Deliverable — KHÔNG viết logic thật ở subtask này, chỉ dựng khung.
 **Acceptance Criteria:** `python -c "import config.sources, config.settings, src.extract.parser, src.extract.lineage, src.extract.registry, src.extract.orchestrator, src.extract.ingest_log, src.extract.unit_of_work.base"` chạy không lỗi ImportError.
+**💡 Vì sao cần:** Không làm → tới lúc code Bronze (Epic 1) mới nghĩ chỗ đặt file, dễ dồn hết logic vào 1 file to, sau này tách ra rất mất công (đổi import khắp nơi). Có nó → khung sẵn từ đầu, biết chính xác code nào nằm file nào trước khi viết dòng logic đầu tiên.
 
 ---
 
@@ -342,6 +431,7 @@ Không dùng cách nào khác ngoài `.gitignore` — không commit rồi xóa s
 **File(s):** `.gitignore`
 **Technical Steps:** Tạo `.gitignore` với `.venv/`, `__pycache__/`, `.env`, `credentials.json`, `data/raw/*`, `data/bronze/*`, `data/silver/*`, `data/gold/*` (giữ `.gitkeep`).
 **Acceptance Criteria:** `git check-ignore -v credentials.json` trả về match.
+**💡 Vì sao cần:** Không làm → chỉ cần 1 lần gõ nhầm `git add .` là file chìa khóa Google Drive thật bị đẩy công khai lên GitHub — không xóa sạch được nữa vì vẫn còn trong lịch sử git. Có nó → git tự động bỏ qua file secret, dù có lỡ tay cũng không dính.
 
 #### SUBTASK — .env.example with placeholder vars
 
@@ -354,6 +444,7 @@ Không dùng cách nào khác ngoài `.gitignore` — không commit rồi xóa s
 **File(s):** `.env.example`
 **Technical Steps:** Tạo `.env.example` với `GOOGLE_SERVICE_ACCOUNT_JSON=credentials.json` (placeholder path, không phải secret thật).
 **Acceptance Criteria:** File `.env.example` được commit lên git, không chứa key/token thật nào.
+**💡 Vì sao cần:** Không làm → người khác (hoặc chính mình sau vài tháng) không biết cần khai báo biến môi trường tên gì để chạy được project, phải dò code mới ra. Có nó → có file mẫu chỉ đúng tên biến cần điền, copy-đổi giá trị là chạy được.
 
 #### SUBTASK — Place real credentials.json + .env, verify git-ignored
 
@@ -366,6 +457,7 @@ Không dùng cách nào khác ngoài `.gitignore` — không commit rồi xóa s
 **File(s):** `credentials.json`, `.env`
 **Technical Steps:** Copy credentials.json vào repo root → tạo `.env` thật → `git check-ignore -v credentials.json .env` → `git status` xác nhận không track.
 **Acceptance Criteria:** `git add .` không stage 2 file này; `os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")` trả đúng path.
+**💡 Vì sao cần:** Không làm → chưa có chìa khóa thật thì không gọi được Google Drive API, toàn bộ pipeline (từ Epic 1 trở đi) không chạy được bước nào. Có nó → có đủ chìa khóa để pipeline hoạt động thật, và đã verify chắc chắn không bị lộ ra ngoài.
 
 > Story cha \[PROD\]: nếu bước này đổi kiến trúc lưu secret so với BRD, cập nhật Confluence decision log của Epic Sprint 0 (link ở đầu Epic).
 
@@ -463,6 +555,7 @@ Test logic nghiệp vụ thật (viết ở P3.7), deploy step (không có môi 
 **File(s):** `.github/workflows/ci.yml`
 **Technical Steps:** Job: checkout → setup-uv → `uv sync` → `uv run ruff check .` (hoặc lint đơn giản) → placeholder test step.
 **Acceptance Criteria:** Workflow file valid YAML, hiện trong tab Actions khi push.
+**💡 Vì sao cần:** Không làm → code lỗi cú pháp/import bị đẩy lên GitHub mà không ai biết, tới khi người khác pull về chạy mới phát hiện. Có nó → mỗi lần push, máy tự kiểm tra hộ, thấy lỗi ngay trên tab Actions trước khi merge.
 
 #### SUBTASK — Verify pytest --collect-only runs clean in CI
 
@@ -475,6 +568,7 @@ Test logic nghiệp vụ thật (viết ở P3.7), deploy step (không có môi 
 **File(s):** `.github/workflows/ci.yml`, `tests/`
 **Technical Steps:** Thêm step `uv run pytest --collect-only` vào workflow → verify chạy pass với `tests/` rỗng (hoặc file test placeholder).
 **Acceptance Criteria:** CI job pass khi chưa có test thật; fail rõ ràng nếu có lỗi import trong `src/`.
+**💡 Vì sao cần:** Không làm → CI "xanh" nhưng thực ra không kiểm tra được gì cả (chưa có test thật), tạo cảm giác an toàn giả. Có nó → ít nhất phát hiện được lỗi import/cú pháp sớm, trước khi có test thật ở P3.7.
 
 ---
 
@@ -570,6 +664,7 @@ Fix lỗ hổng tìm thấy (chỉ ghi nhận baseline, xử lý là việc riê
 **File(s):** `docs/security_baseline_20260726.txt`
 **Technical Steps:** `uvx pip-audit > docs/security_baseline_20260726.txt` → commit file.
 **Acceptance Criteria:** File tồn tại, chứa output scan (kể cả nếu 0 lỗ hổng).
+**💡 Vì sao cần:** Không làm → sau này scan lại thấy có lỗ hổng, không biết là mới xuất hiện hay đã có sẵn từ đầu dự án, không đánh giá được mức độ nghiêm trọng thật. Có nó → có mốc so sánh gốc, lần scan sau chỉ cần đối chiếu là biết ngay cái gì mới.
 
 ---
 
@@ -665,6 +760,7 @@ Kết nối observability stack ngoài (Grafana/Datadog) — không áp dụng c
 **File(s):** `src/logger.py`
 **Technical Steps:** Tạo `logging.Formatter` có `%(asctime)s [%(levelname)s] [batch_id=...] %(message)s`; hàm `get_logger()` gắn batch_id vào LoggerAdapter.
 **Acceptance Criteria:** Import `src.logger`, gọi `get_logger("test-batch").info("hello")` in ra đúng format.
+**💡 Vì sao cần:** Không làm → mỗi module tự in log kiểu riêng, khi có lỗi phải dò từng dòng không theo format nào, không biết dòng nào thuộc lần chạy nào. Có nó → mọi log trong pipeline cùng 1 định dạng thống nhất, dễ đọc/dễ lọc khi debug.
 
 #### SUBTASK — Wire logger into main.py, correlate batch_id as trace_id
 
@@ -677,6 +773,23 @@ Kết nối observability stack ngoài (Grafana/Datadog) — không áp dụng c
 **File(s):** `main.py`
 **Technical Steps:** `main.py` tạo `batch_id = str(uuid.uuid4())` đầu chương trình → truyền vào `get_logger(batch_id)` + các hàm extract/transform.
 **Acceptance Criteria:** Chạy `main.py`, mọi dòng log trong 1 lần chạy có cùng `batch_id`; `batch_id` khớp với ingest_log.parquet ở Epic 1.
+**💡 Vì sao cần:** Không làm → mỗi module tự sinh mã lần chạy riêng, log console và file ingest_log.parquet không khớp nhau, không thể đối chiếu "lỗi này thuộc lần chạy nào". Có nó → 1 mã dùng chung xuyên suốt cả pipeline, đối chiếu log với ingest_log dễ dàng khi có sự cố.
+
+#### SUBTASK — Exit code + summary log phản ánh pipeline fail (core alerting tối thiểu)  _[MỚI]_
+
+**Labels:** devops, phase-0, sprint-0 | **Priority:** High
+
+**Goal:** Đảm bảo pipeline fail LUÔN lộ ra được cho người/hệ thống ngoài biết — không chỉ nằm im trong file log mà không ai đọc. Đây là mức alerting tối thiểu; Slack/email thật là stretch, không có trong scope capstone hiện tại (không có webhook/SMTP server để tích hợp), nhưng cơ chế báo hiệu fail phải có ngay từ Sprint 0, không đợi tới P4.5.
+**Input Spec:** `main.py` (CLI, P3.8), `records: list[dict]` (ingest_log) trả về từ mỗi layer.
+**Output/Deliverable:** `main.py` thoát với `sys.exit(1)` + in dòng summary rõ ràng (`"FAILED: N/M nguồn lỗi ở layer=X, xem ingest_log.parquet"`) ra stderr nếu bất kỳ nguồn nào có `status != "success"` sau khi chạy xong 1 layer; `sys.exit(0)` + summary "OK" nếu toàn bộ thành công.
+**Tech Stack:** Python `sys.exit()`, `src/logger.py`.
+**File(s):** `main.py`
+**Technical Steps:**
+1. Sau mỗi layer (bronze/silver/gold) chạy xong, đếm số record có `status != "success"` trong list trả về
+2. Có ít nhất 1 lỗi → log ERROR summary + `sys.exit(1)` (để script/cron ngoài — kể cả `&& echo fail` đơn giản — bắt được exit code khác 0)
+3. Ghi rõ trong README/Technical Notes: đây là hook điểm để nối Slack/email thật sau này (`if exit_code != 0: send_alert(...)`), không tự làm tích hợp Slack thật trong capstone vì không có webhook thật để test
+**Acceptance Criteria:** Giả lập 1 nguồn `status="failed"` → `main.py` thoát với exit code `1`, có dòng summary lỗi rõ ràng trên stderr; chạy thành công hết → exit code `0`.
+**💡 Vì sao cần:** Không làm → pipeline chạy lỗi nhưng vẫn thoát bình thường như thành công, ai chạy tự động (cron, script ngoài) sẽ tưởng mọi thứ ổn, không ai biết để xử lý cho tới khi nhìn thấy hậu quả (báo cáo sai số liệu). Có nó → lỗi thì báo hiệu rõ ràng ngay lập tức, không phải tự mò log mới phát hiện.
 
 ---
 
@@ -772,6 +885,7 @@ Cập nhật README.md section mới, giữ nguyên nội dung khóa học hiệ
 **File(s):** `README.md`
 **Technical Steps:** Viết steps: clone repo → `cp .env.example .env` → điền `GOOGLE_SERVICE_ACCOUNT_JSON` → `uv sync` → `uv run main.py --layer all --run-date <date>`.
 **Acceptance Criteria:** Người mới làm theo đúng thứ tự chạy được pipeline không cần hỏi thêm.
+**💡 Vì sao cần:** Không làm → người mới (hoặc chính mình sau vài tháng quay lại) không biết bắt đầu từ đâu, phải dò từng file mới ráp lại được các bước. Có nó → làm theo đúng thứ tự trong README là chạy được ngay, không tốn thời gian hỏi lại hay đoán mò.
 
 ---
 
@@ -867,6 +981,7 @@ Ví dụ: `feat(VDAP-15): implement download_file() Drive API`
 **File(s):** `CONTRIBUTING.md`
 **Technical Steps:** Viết branch strategy (`feature/VDAP-xx-slug`, `hotfix/VDAP-xx-slug`) + commit mẫu (`feat(VDAP-12): ...`, `fix(VDAP-20): ...`, `docs:`, `chore:`).
 **Acceptance Criteria:** File tồn tại ở repo root, có ví dụ cụ thể cho từng loại.
+**💡 Vì sao cần:** Không làm → mỗi commit đặt tên tùy hứng, nhìn lịch sử git không biết commit nào sửa gì, không link được với issue trên Jira. Có nó → nhìn vào 1 dòng commit là hiểu ngay đang sửa cái gì, thuộc ticket nào.
 
 ---
 
@@ -886,7 +1001,8 @@ Ví dụ: `feat(VDAP-15): implement download_file() Drive API`
     * [ ] `pl.read_parquet('data/bronze/<run_date>/SRC01_sales_transactions.parquet')` có đủ 5 cột metadata `_source_file, _source_platform, _run_date, _ingested_at, _batch_id`, toàn bộ cột kiểu String
     * [ ] Rerun cùng `run_date` 2 lần: row count không đổi (idempotent)
     * [ ] `registry.UNIT_OF_WORK` có đúng 10 entry, khớp `config.sources.CSV_SOURCES ∪ EXCEL_SOURCES`
-* **Epic DOD:** `uv run python -m src.main --layer bronze --run-date <date>` chạy xong không lỗi, đủ AC trên, `uv run pytest` pass 100% cho toàn bộ test mới (`tests/test_registry.py`, `tests/test_unit_of_work.py`, `tests/test_ingest_log.py`, `tests/test_orchestrator.py`).
+    * [ ] Nguồn thiếu cột bắt buộc so với `REQUIRED_COLUMNS` (Data Dictionary) bị chặn NGAY TẠI BRONZE — `status="schema_mismatch"` trong `ingest_log`, không ghi file Parquet cho nguồn đó, không lộ xuống Silver/Gold
+* **Epic DOD:** `uv run python -m src.main --layer bronze --run-date <date>` chạy xong không lỗi, đủ AC trên, `uv run pytest` pass 100% cho toàn bộ test mới (`tests/test_registry.py`, `tests/test_unit_of_work.py`, `tests/test_ingest_log.py`, `tests/test_orchestrator.py`, `tests/test_parser.py`, `tests/test_lineage.py`). 2 file cuối bắt buộc thêm vì `parser.py` (đọc CSV/Excel, `validate_schema()`) và `lineage.py` (`attach_lineage()`, `cast_to_string()`) trước đó chỉ được test gián tiếp qua `test_unit_of_work.py` — không có test riêng cho từng hàm, dễ lọt lỗi khi 1 trong 2 file này đổi mà `unit_of_work/base.py` mock `read_fn` che mất.
 
 ---
 
@@ -983,21 +1099,24 @@ Xóa `data/raw/` của run lỗi + `data/bronze/<run_date>/` tương ứng (nế
 3. `list_files_in_folder(folder_id)`: query `"'{folder_id}' in parents and trashed=false"`, duyệt hết `nextPageToken` (Drive API trả tối đa ~100 file/trang)
 4. Module-level fail-fast: raise `RuntimeError` rõ ràng nếu thiếu `GDRIVE_FOLDER_ID` — không để lỗi HttpError 404 mơ hồ
 **Acceptance Criteria:** `list_files_in_folder(FOLDER_ID)` trả đúng 10 file (SRC01-SRC10), kể cả khi folder có > 100 file (test bằng pagination giả lập qua `monkeypatch`).
+**💡 Vì sao cần:** Không làm → không kết nối được Google Drive thì không biết folder có file gì để tải, cả pipeline đứng ngay bước đầu tiên. Có nó → có danh sách đầy đủ mọi file trong folder (kể cả khi folder nhiều hơn 100 file, Drive trả nhiều trang) để bước sau tải về.
 
-#### SUBTASK — Implement download_file() qua Drive API
+#### SUBTASK — Implement download_file() qua Drive API + retry/backoff  _[SỬA — thêm retry]_
 
 **Labels:** backend, phase-1, sprint-1 | **Priority:** High
 
-**Goal:** Tải 1 file cụ thể từ Drive về `data/raw/` bằng `file_id`.
+**Goal:** Tải 1 file cụ thể từ Drive về `data/raw/` bằng `file_id`, chịu được lỗi tạm thời (rate limit, network timeout) thay vì fail ngay lần đầu.
 **Input Spec:** `file_id`, `file_name` (từ `list_files_in_folder()`).
-**Output/Deliverable:** `download_file(file_id, file_name, destination_folder="data/raw")` — trả về path file đã tải.
-**Tech Stack:** `googleapiclient.http.MediaIoBaseDownload`.
+**Output/Deliverable:** `download_file(file_id, file_name, destination_folder="data/raw")` — trả về path file đã tải; retry tối đa 3 lần với exponential backoff cho lỗi tạm thời (HTTP 429/500/503, network timeout).
+**Tech Stack:** `googleapiclient.http.MediaIoBaseDownload`, `googleapiclient.errors.HttpError`.
 **File(s):** src/gdrive_connector.py
 **Technical Steps:**
 1. `drive_service.files().get_media(fileId=file_id)`
 2. `MediaIoBaseDownload` ghi từng chunk vào `io.FileIO`
-3. Lỗi giữa chừng: xoá file dở dang (`os.remove`) rồi raise lại — không để lại file rác nửa vời
-**Acceptance Criteria:** File tải về đúng nội dung gốc (so `pl.read_csv`/`pl.read_excel` số dòng khớp Drive gốc); lỗi giữa chừng không để lại file 0-byte/dở dang.
+3. Bọc bước tải bằng retry loop: bắt `HttpError` với status `429`/`500`/`503` hoặc `TimeoutError` → sleep theo exponential backoff (`1s, 2s, 4s`), thử lại tối đa 3 lần; lỗi khác (403 permission, 404 not found) KHÔNG retry — raise ngay vì retry không giải quyết được
+4. Hết 3 lần vẫn lỗi: xoá file dở dang (`os.remove`) rồi raise lại — không để lại file rác nửa vời
+**Acceptance Criteria:** File tải về đúng nội dung gốc (so `pl.read_csv`/`pl.read_excel` số dòng khớp Drive gốc); lỗi giữa chừng không để lại file 0-byte/dở dang; giả lập (`monkeypatch`) 2 lần lỗi 429 rồi thành công ở lần thứ 3 → `download_file()` vẫn trả về path đúng, không raise; giả lập lỗi 403 → raise ngay lần đầu, không retry vô ích.
+**💡 Vì sao cần:** Không làm → mạng chập chờn hoặc Google giới hạn tốc độ gọi API (rất hay gặp) làm cả lần chạy pipeline fail dù dữ liệu chẳng có vấn đề gì, phải chạy lại thủ công từ đầu. Có nó → tự thử lại vài lần cho lỗi tạm thời, chỉ báo lỗi thật khi chắc chắn không phải do mạng/rate-limit.
 
 #### SUBTASK — Loop download toàn bộ 10 SRC vào data/raw/
 
@@ -1013,6 +1132,7 @@ Xóa `data/raw/` của run lỗi + `data/bronze/<run_date>/` tương ứng (nế
 2. Với mỗi file: `download_file(file_info["id"], file_info["name"])`, ghi record `status=success`
 3. Log qua `get_logger(batch_id)`
 **Acceptance Criteria:** Chạy 1 lần tải đúng 10 file, trả về đúng 10 record.
+**💡 Vì sao cần:** Không làm → phải gọi `download_file()` tay 10 lần cho 10 nguồn mỗi lần chạy pipeline. Có nó → 1 lệnh tải hết cả 10 nguồn, tự động lặp qua danh sách file lấy được ở bước trước.
 
 #### SUBTASK — Per-file error handling (status=failed, không crash batch)
 
@@ -1028,6 +1148,7 @@ Xóa `data/raw/` của run lỗi + `data/bronze/<run_date>/` tương ứng (nế
 2. Lỗi: `logger.error(...)`, append record `status=failed`
 3. KHÔNG re-raise — vòng lặp tiếp tục file kế
 **Acceptance Criteria:** Giả lập 1/10 file lỗi (`monkeypatch` raise `ConnectionError`) → 9 file còn lại vẫn `status=success`, record đủ 10, không exception nào thoát ra ngoài `download_all_sources()`.
+**💡 Vì sao cần:** Không làm → 1 file lỗi (VD file bị xóa, mất mạng giữa chừng) làm cả 10 nguồn crash theo, dù 9 file kia hoàn toàn ổn — mất cả buổi chạy pipeline chỉ vì 1 file. Có nó → 1 nguồn lỗi chỉ đánh dấu riêng nguồn đó, 9 nguồn còn lại vẫn có dữ liệu bình thường.
 
 ---
 
@@ -1056,6 +1177,7 @@ Xóa `data/raw/` của run lỗi + `data/bronze/<run_date>/` tương ứng (nế
 ### ✅ Acceptance Criteria (AC)
 - [ ] **Scenario 1 (Happy path):** Given 10 file trong `data/raw/`, When gọi `registry.UNIT_OF_WORK[source_file](...)` cho từng nguồn, Then thu được đúng 10 DataFrame, số dòng khớp file gốc, toàn bộ cột kiểu String
 - [ ] **Scenario 2 (Error/Exception):** Given file Excel thiếu engine đọc, When `read_excel_source()` lỗi, Then báo lỗi rõ ràng gợi ý cài `fastexcel` thay vì crash mơ hồ
+- [ ] **Scenario 3 (Error/Exception — schema drift, fail-fast ngay ở Bronze):** Given nguồn Google Drive đổi cấu trúc file (thêm/xóa/đổi tên cột so với Data Dictionary), When `process_source()` đọc xong file đó, Then validate cột NGAY tại Bronze — dừng ghi Bronze cho riêng nguồn đó, record `status="schema_mismatch"` trong `ingest_log` (không phải `"failed"` chung chung), 9 nguồn còn lại vẫn chạy bình thường. Không đợi tới Silver mới phát hiện.
 
 ---
 ### 🔒 Non-Functional Requirements
@@ -1090,6 +1212,7 @@ Tải file (P1.1), gắn metadata (P1.3), ghi Bronze (P1.4).
 1. Liệt kê đúng 10 tên file theo BRD 2.2
 2. Không import gì từ `src/` ở đây (tránh vòng phụ thuộc ngược)
 **Acceptance Criteria:** `len(CSV_SOURCES) + len(EXCEL_SOURCES) == 10`, không trùng tên file.
+**💡 Vì sao cần:** Không làm → tên 10 file nguồn bị viết rải rác/lặp lại trong nhiều file code khác nhau, sửa 1 tên nguồn phải tìm sửa nhiều chỗ, dễ sót. Có nó → khai báo đúng 1 chỗ duy nhất, chỗ khác chỉ import về dùng, sửa 1 lần là đủ.
 
 #### SUBTASK — extract/parser.py — read_csv_source()/read_excel_source() đơn nguồn  _[SỬA]_
 
@@ -1105,25 +1228,44 @@ Tải file (P1.1), gắn metadata (P1.3), ghi Bronze (P1.4).
 2. `read_excel_source`: `pl.read_excel(path).select(pl.all().cast(pl.String))`, bọc try/except `ImportError` → raise lại kèm hướng dẫn `uv add fastexcel`
 3. File thiếu/hỏng: KHÔNG bắt lỗi ở đây — để lỗi tự nhiên nổi lên caller
 **Acceptance Criteria:** Đọc đúng số dòng, toàn bộ cột kiểu String; file thiếu raise `FileNotFoundError` tự nhiên; test riêng lỗi thiếu engine Excel.
+**💡 Vì sao cần:** Không làm → mỗi `unit_of_work` tự viết code đọc CSV/Excel riêng, 10 chỗ code gần giống nhau, sửa 1 lỗi đọc file phải sửa 10 nơi. Có nó → logic đọc file chỉ tồn tại đúng 1 chỗ, ép String ngay từ lúc đọc để tránh Polars tự đoán sai kiểu dữ liệu rồi báo lỗi khó hiểu.
 
-#### SUBTASK — extract/unit_of_work/base.py — process_source() dùng chung  _[MỚI]_
+#### SUBTASK — config/sources.py — REQUIRED_COLUMNS + extract/parser.py — validate_schema()  _[MỚI]_
 
 **Labels:** backend, phase-1, sprint-1 | **Priority:** High
 
-**Goal:** Logic dùng chung cho mọi `unit_of_work`: đọc 1 file (qua hàm truyền vào) → gắn lineage → ép String → đo duration → dựng ingest_log record. Tránh lặp lại ở 10 file `src0X`.
-**Input Spec:** `read_fn` (`read_csv_source`/`read_excel_source`), `source_file`, `raw_dir`, `run_date`, `batch_id`.
+**Goal:** Chặn schema drift NGAY TẠI BRONZE, ngay sau khi đọc raw file — không đợi tới Silver (P2.1) mới phát hiện nguồn đổi cấu trúc. Đây là fail-fast gate đầu tiên của pipeline.
+**Input Spec:** Data Dictionary (BRD §2.2) — danh sách cột bắt buộc từng nguồn.
+**Output/Deliverable:** `config/sources.py` — `REQUIRED_COLUMNS: dict[str, list[str]]` (source_file → cột bắt buộc); `src/extract/parser.py` — `validate_schema(df, source_file)` raise `SchemaMismatchError(source_file, missing_cols, extra_cols)` nếu lệch.
+**Tech Stack:** Python dict config, custom Exception class.
+**File(s):** `config/sources.py`, `src/extract/parser.py`
+**Technical Steps:**
+1. Khai báo `REQUIRED_COLUMNS` cho cả 10 nguồn theo Data Dictionary
+2. `validate_schema(df, source_file)`: so `set(df.columns)` với `set(REQUIRED_COLUMNS[source_file])`, thiếu cột nào raise `SchemaMismatchError` liệt kê rõ tên cột thiếu + tên nguồn (cột thừa chỉ log warning, không chặn — nguồn thêm cột mới không phải lỗi)
+3. Định nghĩa `SchemaMismatchError(Exception)` riêng (không dùng `ValueError` chung chung) để orchestrator (P1.4) phân biệt được với lỗi đọc file thông thường, map đúng sang `status="schema_mismatch"` ở ingest_log
+**Acceptance Criteria:** File Bronze test thiếu 1 cột bắt buộc → `validate_schema()` raise `SchemaMismatchError` nêu rõ cột thiếu; nguồn có thêm cột lạ (không nằm trong `REQUIRED_COLUMNS`) KHÔNG bị chặn, chỉ log.
+**💡 Vì sao cần:** Không làm → bộ phận Sales/Marketing đổi cấu trúc file Excel (xóa/đổi tên 1 cột) mà không báo trước — pipeline vẫn "chạy thành công" bình thường, chỉ là dữ liệu bị thiếu/sai âm thầm, phải đợi đến khi ai đó phát hiện số liệu báo cáo sai mới lần ngược lại tìm nguyên nhân. Có nó → phát hiện ngay tại bước đầu tiên (Bronze), báo rõ thiếu cột gì của nguồn nào, không để lỗi trôi xuống các bước sau.
+
+#### SUBTASK — extract/unit_of_work/base.py — process_source() dùng chung  _[SỬA — gọi validate_schema() ngay sau đọc]_
+
+**Labels:** backend, phase-1, sprint-1 | **Priority:** High
+
+**Goal:** Logic dùng chung cho mọi `unit_of_work`: đọc 1 file (qua hàm truyền vào) → validate schema (fail-fast) → gắn lineage → ép String → đo duration → dựng ingest_log record. Tránh lặp lại ở 10 file `src0X`.
+**Input Spec:** `read_fn` (`read_csv_source`/`read_excel_source`), `source_file`, `raw_dir`, `run_date`, `batch_id`, `validate_schema()` (subtask trước).
 **Output/Deliverable:** `process_source(read_fn, source_file, raw_dir, run_date, batch_id) -> tuple[pl.DataFrame, dict]` — DataFrame sẵn sàng ghi Bronze + 1 ingest_log record (`status=success`).
-**Tech Stack:** `time.monotonic()` đo duration, gọi `lineage.attach_lineage()` + `lineage.cast_to_string()` (xem P1.3/P1.4).
+**Tech Stack:** `time.monotonic()` đo duration, gọi `parser.validate_schema()`, `lineage.attach_lineage()` + `lineage.cast_to_string()` (xem P1.3/P1.4).
 **File(s):** src/extract/unit_of_work/base.py
 **Technical Steps:**
 1. `started = time.monotonic()`
 2. `df = read_fn(source_file, raw_dir)`
-3. `df = attach_lineage(df, source_file, run_date, batch_id)`
-4. `df = cast_to_string(df)`
-5. `duration_sec = time.monotonic() - started`
-6. Dựng record qua `ingest_log.build_ingest_log_record(...)`, `status="success"`
-7. Lỗi đọc file KHÔNG bắt ở đây — orchestrator (P1.4) quyết định fail-safe theo từng nguồn
-**Acceptance Criteria:** Trả về DataFrame toàn String + đủ 5 cột lineage; record đúng schema, `rows_loaded` khớp `df.height`.
+3. `validate_schema(df, source_file)` — gọi NGAY SAU đọc, TRƯỚC khi gắn lineage — `SchemaMismatchError` propagate lên, KHÔNG bắt ở đây
+4. `df = attach_lineage(df, source_file, run_date, batch_id)`
+5. `df = cast_to_string(df)`
+6. `duration_sec = time.monotonic() - started`
+7. Dựng record qua `ingest_log.build_ingest_log_record(...)`, `status="success"`
+8. Lỗi đọc file / `SchemaMismatchError` KHÔNG bắt ở đây — orchestrator (P1.4) quyết định fail-safe theo từng nguồn, phân biệt `status="failed"` (lỗi đọc/khác) vs `status="schema_mismatch"` (riêng `SchemaMismatchError`)
+**Acceptance Criteria:** Trả về DataFrame toàn String + đủ 5 cột lineage; record đúng schema, `rows_loaded` khớp `df.height`; nguồn thiếu cột bắt buộc raise `SchemaMismatchError` trước khi kịp gắn lineage/ghi Bronze.
+**💡 Vì sao cần:** Không làm → 10 module `src01..src10` mỗi cái tự viết lại y hệt các bước (đọc → validate → gắn lineage → ép String → đo thời gian), sửa 1 bước chung phải sửa 10 chỗ. Có nó → viết đúng 1 lần, 10 nguồn chỉ cần gọi lại, đảm bảo bước nào cũng đi qua đủ quy trình như nhau, không nguồn nào bị bỏ sót bước.
 
 #### SUBTASK — extract/unit_of_work/src01..src10.py — 10 module per-source  _[MỚI]_
 
@@ -1139,6 +1281,7 @@ Tải file (P1.1), gắn metadata (P1.3), ghi Bronze (P1.4).
 2. `def run(raw_dir, run_date, batch_id): return process_source(read_csv_source hoặc read_excel_source, SOURCE_FILE, raw_dir, run_date, batch_id)`
 3. SRC01/03/06/09 dùng `read_csv_source`, SRC02/04/05/07/08/10 dùng `read_excel_source`
 **Acceptance Criteria:** Mỗi `run()` trả DataFrame toàn String + đủ 5 cột lineage, record `status=success` kèm `rows_loaded` đúng — test bằng fixture file giả trong `tmp_path`.
+**💡 Vì sao cần:** Không làm → không có cách nào để nói "nguồn SRC01 dùng hàm đọc CSV, SRC02 dùng hàm đọc Excel" một cách tường minh, orchestrator không biết gọi hàm nào cho nguồn nào. Có nó → mỗi nguồn có 1 file riêng khai rõ ràng "tôi là nguồn nào, đọc kiểu gì", dễ tìm dễ sửa khi có vấn đề với đúng 1 nguồn cụ thể.
 
 #### SUBTASK — extract/registry.py — UNIT_OF_WORK dict map source→run()  _[MỚI]_
 
@@ -1154,6 +1297,20 @@ Tải file (P1.1), gắn metadata (P1.3), ghi Bronze (P1.4).
 2. Dựng dict `{module.SOURCE_FILE: module.run}`
 3. KHÔNG dùng dynamic discovery/importlib — 10 nguồn cố định, dict tĩnh đơn giản hơn và IDE/type-check theo dõi được
 **Acceptance Criteria:** `len(UNIT_OF_WORK) == 10`, `set(UNIT_OF_WORK.keys()) == set(CSV_SOURCES) | set(EXCEL_SOURCES)`.
+**💡 Vì sao cần:** Không làm → orchestrator (P1.4) phải viết `if source == "SRC01": ... elif source == "SRC02": ...` dài 10 nhánh mỗi lần muốn chạy đúng nguồn. Có nó → tra 1 phát trong dict là ra đúng hàm cần gọi, orchestrator chỉ cần loop qua dict, không cần biết chi tiết từng nguồn.
+
+#### SUBTASK — tests/test_parser.py: unit test read_csv_source()/read_excel_source()/validate_schema() độc lập  _[MỚI]_
+
+**Labels:** backend, phase-1, sprint-1 | **Priority:** Medium
+
+**Goal:** Test riêng `parser.py`, không chỉ dựa vào việc nó được gọi gián tiếp qua `unit_of_work/base.py` (nơi `read_fn` thường bị mock, che luôn logic đọc file thật).
+**Input Spec:** File CSV/Excel giả nhỏ trong `tmp_path` (pytest fixture).
+**Output/Deliverable:** `tests/test_parser.py` — test `read_csv_source()`, `read_excel_source()` (đọc đúng số dòng, toàn String, lỗi thiếu `fastexcel` báo rõ), `validate_schema()` (raise `SchemaMismatchError` đúng khi thiếu cột, không raise khi đủ cột hoặc thừa cột lạ).
+**Tech Stack:** pytest, `tmp_path` fixture, Polars.
+**File(s):** `tests/test_parser.py`
+**Technical Steps:** Tạo file CSV/Excel giả trong `tmp_path` → gọi từng hàm → assert output/exception đúng như Acceptance Criteria của từng subtask ở trên trong story này.
+**Acceptance Criteria:** `uv run pytest tests/test_parser.py` pass 100%, độc lập không cần mock `unit_of_work/base.py`.
+**💡 Vì sao cần:** Không làm → nếu chỉ test qua `unit_of_work` (nơi thường giả lập luôn cả bước đọc file), logic đọc file THẬT trong `parser.py` có thể có bug mà không test nào bắt được. Có nó → test thẳng vào đúng chỗ code đọc file thật, phát hiện lỗi ở đúng nơi phát sinh, không bị "test giả" che mất.
 
 ---
 
@@ -1216,6 +1373,7 @@ Ghi Bronze Parquet (P1.4).
 1. `df.with_columns(pl.lit(source_file).alias("_source_file"), pl.lit("google_drive").alias("_source_platform"), pl.lit(run_date).alias("_run_date"), pl.lit(datetime.now(UTC)).alias("_ingested_at"), pl.lit(batch_id).alias("_batch_id"))`
 2. Giữ nguyên toàn bộ cột gốc + số dòng — không lọc/biến đổi dữ liệu nghiệp vụ ở bước này
 **Acceptance Criteria:** Đủ 5 cột đúng giá trị; số dòng/cột gốc không đổi; gọi 2 lần liên tiếp ra 2 giá trị `_ingested_at` khác nhau (stamp theo thời điểm gọi).
+**💡 Vì sao cần:** Không làm → sau này số liệu sai/lệch, không biết dữ liệu đến từ file nào, ngày nào, lần chạy nào — không truy vết được nguồn gốc lỗi. Có nó → mỗi dòng dữ liệu đều "có dấu vân tay" riêng, lần nào cũng biết chính xác lấy từ đâu.
 
 #### SUBTASK — Wire attach_lineage() vào unit_of_work/base.py.process_source()  _[SỬA]_
 
@@ -1230,6 +1388,7 @@ Ghi Bronze Parquet (P1.4).
 1. Import `attach_lineage` vào `base.py`
 2. Chèn vào đúng vị trí: đọc → `attach_lineage` → `cast_to_string`
 **Acceptance Criteria:** Chạy `unit_of_work/src01.run(...)` trả DataFrame đủ 5 cột lineage — không cần gọi `attach_lineage()` thủ công ở nơi khác.
+**💡 Vì sao cần:** Không làm → hàm `attach_lineage()` tồn tại nhưng không ai gọi nó thì vô dụng — hoặc tệ hơn, có nguồn quên gọi, có nguồn không, dữ liệu thiếu dấu vết không đồng đều. Có nó → cắm sẵn vào quy trình chung, nguồn nào đi qua `process_source()` cũng tự động có đủ lineage, không ai có thể quên.
 
 #### SUBTASK — uuid batch_id sinh 1 lần/run, share qua toàn bộ 10 nguồn
 
@@ -1244,6 +1403,20 @@ Ghi Bronze Parquet (P1.4).
 1. Sinh `batch_id` ngay đầu `main()`
 2. Truyền `batch_id` cho toàn bộ hàm downstream, KHÔNG sinh mới ở bất kỳ đâu khác
 **Acceptance Criteria:** Log console + `ingest_log.parquet` của cùng 1 lần chạy đều mang đúng 1 `batch_id`.
+**💡 Vì sao cần:** Không làm → nếu mỗi nguồn tự sinh mã riêng, không thể nhóm 10 dòng ingest_log lại thành "1 lần chạy pipeline" — không trả lời được câu "lần chạy sáng nay tải được bao nhiêu nguồn, có lỗi không". Có nó → 1 mã đại diện cho cả lần chạy, dễ dàng lọc/nhóm dữ liệu theo từng batch.
+
+#### SUBTASK — tests/test_lineage.py: unit test attach_lineage()/cast_to_string() độc lập  _[MỚI]_
+
+**Labels:** backend, phase-1, sprint-1 | **Priority:** Medium
+
+**Goal:** Test riêng `lineage.py`, không chỉ dựa vào việc nó được gọi gián tiếp trong `test_unit_of_work.py`.
+**Input Spec:** DataFrame fixture nhỏ (2-3 dòng, vài cột giả).
+**Output/Deliverable:** `tests/test_lineage.py` — test `attach_lineage()` (đủ 5 cột, `_ingested_at` khác nhau giữa 2 lần gọi) và `cast_to_string()` (toàn bộ dtype ra String, kể cả cột Datetime).
+**Tech Stack:** pytest, Polars.
+**File(s):** `tests/test_lineage.py`
+**Technical Steps:** Fixture DataFrame nhỏ → gọi `attach_lineage()` assert đủ cột + giá trị đúng → gọi `cast_to_string()` assert toàn bộ `df.dtypes == pl.String`.
+**Acceptance Criteria:** `uv run pytest tests/test_lineage.py` pass 100%, độc lập không cần mock `unit_of_work/base.py`.
+**💡 Vì sao cần:** Không làm → test qua `unit_of_work` có thể che mất bug thật trong `attach_lineage()`/`cast_to_string()` nếu fixture không đủ đa dạng. Có nó → test thẳng vào 2 hàm lõi này, chắc chắn chúng hoạt động đúng độc lập với mọi thứ khác.
 
 ---
 
@@ -1306,6 +1479,7 @@ Partition folder: `run_date.replace("-", "")` (VD `2026-08-01` → `20260801`), 
 1. `df.select(pl.all().cast(pl.String))`
 2. Gọi SAU `attach_lineage()` trong `unit_of_work/base.py.process_source()` (đã wire ở P1.3) — đóng lại invariant "toàn String" của Bronze
 **Acceptance Criteria:** Sau `cast_to_string()`, `all(dtype == pl.String for dtype in df.dtypes)` đúng cho mọi cột kể cả `_ingested_at`.
+**💡 Vì sao cần:** Không làm → 1 cột số/ngày ở nguồn có giá trị lạ (VD chữ lẫn trong cột số lượng) làm cả pipeline crash ngay lúc ghi Bronze, vì Polars cố giữ đúng kiểu dữ liệu suy luận được. Có nó → mọi thứ về String hết, không có kiểu dữ liệu nào có thể "sai" ở bước này — dữ liệu bẩn tới đâu vẫn ghi được vào Bronze, xử lý sạch để ở bước Silver sau.
 
 #### SUBTASK — config/settings.py — RAW_DIR/BRONZE_DIR/SILVER_DIR/GOLD_DIR  _[MỚI]_
 
@@ -1320,6 +1494,7 @@ Partition folder: `run_date.replace("-", "")` (VD `2026-08-01` → `20260801`), 
 1. Khai báo 4 constant path
 2. **Không** đặt `FOLDER_ID`/`SERVICE_ACCOUNT_FILE` (Drive credentials) vào file này — nếu `gdrive_connector.py` đọc 2 giá trị đó qua module trung gian, `importlib.reload(gdrive_connector)` trong test sẽ không re-eval được env var mới (giá trị bị cache ở `config.settings`), phá test fail-fast validation. Giữ 2 giá trị đó inline trong `gdrive_connector.py`
 **Acceptance Criteria:** `parser.py` và `orchestrator.py` import `RAW_DIR`/`BRONZE_DIR` từ đây thay vì hardcode string; test `gdrive_connector` fail-fast (`importlib.reload`) vẫn pass sau khi thêm file này.
+**💡 Vì sao cần:** Không làm → đường dẫn `"data/bronze"` gõ tay rải rác nhiều file, sau này muốn đổi tên thư mục phải tìm-sửa từng chỗ, dễ sót 1 chỗ gây lỗi khó hiểu. Có nó → đổi đường dẫn chỉ cần sửa đúng 1 dòng ở đây, mọi nơi khác tự động dùng theo.
 
 #### SUBTASK — extract/orchestrator.py — run_bronze_ingestion() loop registry  _[MỚI]_
 
@@ -1334,9 +1509,11 @@ Partition folder: `run_date.replace("-", "")` (VD `2026-08-01` → `20260801`), 
 1. `out_dir = os.path.join(bronze_dir, run_date.replace("-", ""))`, `os.makedirs(out_dir, exist_ok=True)`
 2. Loop `for source_file, run_unit in UNIT_OF_WORK.items()`
 3. `df, record = run_unit(raw_dir, run_date, batch_id)` → `df.write_parquet(os.path.join(out_dir, f"{name_khong_duoi}.parquet"))`
-4. 1 nguồn lỗi (đọc/ghi): try/except, KHÔNG crash cả batch — record `status=failed`, tiếp tục nguồn kế (cùng pattern `download_all_sources`)
-5. Trả về `records` (list ingest_log — nối với P1.5)
-**Acceptance Criteria:** Chạy xong `data/bronze/<run_date>/` có đủ 10 file `.parquet`; giả lập 1 nguồn lỗi vẫn ra đủ 9 file còn lại + record `status=failed` cho nguồn lỗi.
+4. 1 nguồn lỗi: try/except phân biệt 2 loại — bắt `SchemaMismatchError` riêng trước (record `status="schema_mismatch"`), các exception khác (đọc/ghi file) record `status="failed"` — cả 2 đều KHÔNG crash cả batch, tiếp tục nguồn kế (cùng pattern `download_all_sources`)
+5. Nguồn bị `schema_mismatch`/`failed` → KHÔNG ghi file `.parquet` cho nguồn đó (không ghi Bronze dữ liệu nghi ngờ sai schema)
+6. Trả về `records` (list ingest_log — nối với P1.5)
+**Acceptance Criteria:** Chạy xong `data/bronze/<run_date>/` có đủ 10 file `.parquet` (happy path); giả lập 1 nguồn lỗi đọc/ghi vẫn ra đủ 9 file còn lại + record `status=failed`; giả lập 1 nguồn thiếu cột bắt buộc → record `status="schema_mismatch"` riêng biệt, không lẫn với `status=failed`, và KHÔNG có file `.parquet` cho nguồn đó.
+**💡 Vì sao cần:** Không làm → không có ai đứng ra "chỉ huy" chạy lần lượt 10 nguồn rồi ghi ra Bronze — mỗi nguồn chạy tay riêng lẻ, dễ quên/bỏ sót, không tổng hợp được kết quả cả lần chạy. Có nó → 1 hàm chạy hết cả 10 nguồn, tự biết nguồn nào ok, nguồn nào lỗi, nguồn nào sai schema — không cần người ngồi canh từng bước.
 
 #### SUBTASK — Idempotency check: rerun same run_date, row count stable
 
@@ -1352,6 +1529,7 @@ Partition folder: `run_date.replace("-", "")` (VD `2026-08-01` → `20260801`), 
 2. Chạy lại `run_bronze_ingestion(run_date="X", batch_id="b2", ...)` — batch_id khác, run_date giống
 3. So sánh `pl.read_parquet(...).shape[0]` trước/sau — phải bằng nhau, file không nhân bản (glob đúng 1 file/nguồn trong thư mục)
 **Acceptance Criteria:** Row count không đổi giữa 2 lần chạy; `glob("SRCxx*.parquet")` trong thư mục run_date chỉ ra đúng 1 file.
+**💡 Vì sao cần:** Không làm → chạy lại pipeline (vì lỗi giữa chừng, hoặc chỉ để test) có nguy cơ nhân đôi dữ liệu (dữ liệu cũ + dữ liệu mới cộng dồn), báo cáo sai số liệu mà không ai biết vì sao. Có nó → chắc chắn chạy lại bao nhiêu lần cũng ra đúng 1 bản dữ liệu cho mỗi ngày, không sợ chạy nhầm 2 lần.
 
 ---
 
@@ -1379,7 +1557,8 @@ Partition folder: `run_date.replace("-", "")` (VD `2026-08-01` → `20260801`), 
 ---
 ### ✅ Acceptance Criteria (AC)
 - [ ] **Scenario 1 (Happy path):** Given pipeline chạy xong, When đọc `ingest_log.parquet`, Then có đủ 10 dòng (1/nguồn), cột `status='success'`, `rows_loaded` khớp số dòng thật
-- [ ] **Scenario 2 (Error/Exception):** Given 1 nguồn lỗi ở orchestrator, When ghi ingest_log, Then dòng tương ứng có `status='failed'`, `rows_loaded=0`, không làm crash việc ghi log của 9 nguồn còn lại
+- [ ] **Scenario 2 (Error/Exception):** Given 1 nguồn lỗi đọc/ghi (không phải schema) ở orchestrator, When ghi ingest_log, Then dòng tương ứng có `status='failed'`, `rows_loaded=0`, không làm crash việc ghi log của 9 nguồn còn lại
+- [ ] **Scenario 3 (Error/Exception):** Given 1 nguồn bị `SchemaMismatchError` (P1.2), When ghi ingest_log, Then dòng tương ứng có `status='schema_mismatch'` — phân biệt rõ với `'failed'` để Admin biết ngay là do đổi cấu trúc file, không phải lỗi mạng/tạm thời
 
 ---
 ### 🔒 Non-Functional Requirements
@@ -1414,6 +1593,7 @@ Ghi CÙNG thư mục `data/bronze/<run_date>/` (không phải file riêng ngoài
 1. `build_ingest_log_record`: dựng dict đúng 7 field, `source_name = os.path.splitext(source_file)[0]`
 2. `write_ingest_log`: `os.makedirs(bronze_run_dir, exist_ok=True)`, `pl.DataFrame(records, schema=INGEST_LOG_COLUMNS).write_parquet(path)` — ghi đè (không append) để giữ idempotency
 **Acceptance Criteria:** Đọc lại `ingest_log.parquet` đủ 7 cột; rerun cùng thư mục ghi đè không append (row count không tăng theo số lần chạy).
+**💡 Vì sao cần:** Không làm → không có cách nào chuẩn hóa 1 dòng "báo cáo" cho mỗi nguồn (tải được bao nhiêu dòng, mất bao lâu, thành công hay lỗi) — mỗi nơi tự ghi log kiểu riêng. Có nó → có đúng 1 định dạng chuẩn, ghi ra file để sau này tra cứu/lọc bằng Polars hay Power BI đều được.
 
 #### SUBTASK — Collect rows_loaded/status/duration_sec trong unit_of_work/base.py  _[SỬA]_
 
@@ -1429,6 +1609,7 @@ Ghi CÙNG thư mục `data/bronze/<run_date>/` (không phải file riêng ngoài
 2. `rows_loaded = df.height` (sau cast, số dòng không đổi qua các bước trên)
 3. Gọi `ingest_log.build_ingest_log_record(..., status="success")`
 **Acceptance Criteria:** Mỗi nguồn có 1 record đúng schema; `status=failed` + `rows_loaded=0` khi lỗi (dựng ở `orchestrator.py`, không phải ở `base.py` — lỗi đọc không bắt trong `process_source()`, xem P1.4).
+**💡 Vì sao cần:** Không làm → không biết mỗi nguồn tải được bao nhiêu dòng, chạy mất bao lâu — không phát hiện được bất thường (VD nguồn tự nhiên tải được 0 dòng, hoặc chạy chậm bất thường). Có nó → có số liệu cụ thể cho từng nguồn mỗi lần chạy, dễ so sánh giữa các lần để phát hiện bất thường.
 
 #### SUBTASK — Wire write_ingest_log() vào orchestrator.py  _[MỚI]_
 
@@ -1443,6 +1624,7 @@ Ghi CÙNG thư mục `data/bronze/<run_date>/` (không phải file riêng ngoài
 1. Sau vòng loop 10 nguồn (dù có nguồn lỗi hay không), gọi `write_ingest_log(records, out_dir)`
 2. Return `records` để caller (main.py/test) kiểm tra được summary
 **Acceptance Criteria:** `data/bronze/<run_date>/ingest_log.parquet` tồn tại sau MỖI lần chạy `run_bronze_ingestion()`, kể cả khi có nguồn lỗi.
+**💡 Vì sao cần:** Không làm → có hàm ghi log (`write_ingest_log`) nhưng không ai gọi nó thì log không bao giờ được ghi ra file thật. Có nó → cắm đúng vào cuối quy trình, chạy lần nào cũng tự động có file log, kể cả lần chạy bị lỗi giữa chừng.
 
 ---
 
@@ -1461,11 +1643,13 @@ Ghi CÙNG thư mục `data/bronze/<run_date>/` (không phải file riêng ngoài
 
     * \[ \] `data/silver/<run_date>/` chứa đủ 10 file `.parquet`
     * \[ \] Cột `amount`/số tiền là Float, không còn dấu phẩy ngăn cách hàng nghìn
+    * \[ \] Cột ngày parse đúng theo format khai báo riêng từng nguồn (xem P2.1) — không có cột ngày nào NULL hàng loạt do lệch format giữa nguồn CSV/Excel
     * \[ \] `customer_master` không còn dòng nào NULL ở `tax_code`
     * \[ \] 5 cột metadata lineage giữ nguyên từ Bronze
     * \[ \] Idempotent theo `run_date`
+    * \[ \] Schema drift từ nguồn bị chặn TỪ BRONZE (P1.2), không lộ tới Silver; validate ở Silver (P2.1) chỉ còn là lớp phòng vệ thứ 2 bắt lỗi nội bộ, không phải điểm phát hiện chính
     
-* **Epic DOD:** `pl.read_parquet('data/silver/<date>/SRC01_sales_transactions.parquet')` có cột `amount`/`net_amount` kiểu Float64; không còn duplicate 100% dòng.
+* **Epic DOD:** `pl.read_parquet('data/silver/<date>/SRC01_sales_transactions.parquet')` có cột `amount`/`net_amount` kiểu Float64; không còn duplicate 100% dòng; `uv run pytest tests/test_transform_silver.py` pass 100% (test cast kiểu, dedup, NULL handling — không chỉ check thủ công).
 
 ---
 
@@ -1518,15 +1702,16 @@ N/A (Production Impact: Không)
 
 ### 🔄 End-to-End Data Flow Definition
 
-* **📥 Input:** `data/bronze/<run_date>/*.parquet` (toàn bộ cột String)
-* **⚙️ Processing:** `.str.replace_all(",", "")` xóa dấu phẩy ngăn cách hàng nghìn → `.cast(pl.Float64)` cho cột tiền/số lượng; `.str.strptime(pl.Date, ...)` cho cột ngày
-* **📤 Output:** DataFrame với cột tiền/số lượng kiểu Float64/Int64, cột ngày kiểu Date/Datetime
+* **📥 Input:** `data/bronze/<run_date>/*.parquet` (toàn bộ cột String — nhưng String hoá KHÔNG đồng nhất giữa 2 đường: 4 nguồn CSV giữ nguyên text gốc từ file; 6 nguồn Excel bị Polars tự suy luận kiểu rồi mới `.cast(pl.String)` ở Bronze, nên cùng là "cột ngày dạng String" nhưng khác format giữa 2 nhóm nguồn)
+* **⚙️ Processing:** Validate đủ cột bắt buộc trước khi cast (fail sớm nếu thiếu) → `.str.replace_all(",", "")` xóa dấu phẩy ngăn cách hàng nghìn → `.cast(pl.Float64)` cho cột tiền/số lượng → `.str.strptime(pl.Date, fmt, strict=False)` cho cột ngày, `fmt` tra theo bảng mapping cột→format riêng từng nguồn (không dùng 1 format cứng chung cho cả 10 nguồn)
+* **📤 Output:** DataFrame với cột tiền/số lượng kiểu Float64/Int64, cột ngày kiểu Date/Datetime; log rõ tên cột/nguồn nếu tỷ lệ parse NULL bất thường (nghi format sai) thay vì âm thầm trôi tiếp
 
 ---
 
 ### ✅ Definition of Ready
 
-- [x] Spec rõ (phase2_silver_cleansing.md mục 2, Hint về dấu phẩy)
+- [x] Spec rõ (phase2_silver_cleansing.md mục 2, Hint về dấu phẩy + Hint về múi giờ)
+- [x] Đã xác nhận format ngày thật của từng nguồn qua sample file (không đoán) — xem Assumption bên dưới nếu chưa xác nhận được
 - [x] Không cần Design
 - [x] Blocked By Epic 1 (P1.4 Bronze parquet có sẵn)
 - [x] Story Points đã ước lượng
@@ -1553,7 +1738,9 @@ N/A (Production Impact: Không)
 ### ✅ Acceptance Criteria
 
 * \[ \] **Scenario 1 (Happy path):** Given Bronze cột `net_amount` dạng String "1,000,000", When cast, Then giá trị Silver = 1000000.0 (Float64)
-* \[ \] **Scenario 2 (Error/Exception):** Given giá trị ngày sai định dạng không parse được, When `strptime` thất bại, Then dòng đó set NULL ở cột ngày thay vì crash toàn bộ pipeline
+* \[ \] **Scenario 2 (Error/Exception):** Given 1 dòng lẻ có giá trị ngày dị dạng (data rác thật), When `strptime` với đúng format của nguồn đó vẫn thất bại, Then dòng đó set NULL ở cột ngày thay vì crash toàn bộ pipeline
+* \[ \] **Scenario 3 (Error/Exception — schema drift):** Given Bronze thiếu 1 cột bắt buộc theo Data Dictionary (nguồn đổi tên/xóa cột), When chạy Silver transform, Then pipeline dừng ngay với lỗi nêu rõ tên cột + tên nguồn thiếu, không tự map nhầm cột khác hoặc tạo cột NULL âm thầm
+* \[ \] **Scenario 4 (Error/Exception — format sai cả cột):** Given format ngày khai báo cho 1 nguồn bị sai (áp nhầm format của nguồn khác), When parse cả cột, Then tỷ lệ NULL sinh ra bất thường (VD >50% dòng) phải được log cảnh báo rõ ràng — không coi là "chạy xong không lỗi" nếu gần như cả cột NULL
 
 ---
 
@@ -1565,7 +1752,7 @@ N/A (Production Impact: Không)
 
 ### 📊 Observability Requirements
 
-N/A
+Log số dòng NULL phát sinh sau mỗi bước cast (theo cột) qua `src/logger.py` — phân biệt NULL do data rác thật (dự kiến, tỷ lệ thấp) với NULL do lệch format/schema drift (bất thường, tỷ lệ cao).
 
 ---
 
@@ -1579,9 +1766,31 @@ N/A
 
 Chuẩn hóa text, dedup (P2.2), NULL business key (P2.3)
 
+### 📝 Assumptions Made
+
+* Format ngày thật của từng cột (VD `order_date` ở SRC01 CSV có thể là `DD/MM/YYYY` theo quy ước VN, trong khi cột ngày ở nguồn Excel bị Bronze cast từ kiểu Date gốc sang String ISO `YYYY-MM-DD`) **chưa được xác nhận bằng cách mở sample file thật** — subtask "Validate + mapping format ngày theo từng nguồn" bên dưới phải mở file mẫu xác nhận trước khi hardcode format, không đoán theo 1 format duy nhất như bản cũ.
+* Cột `_ingested_at` là UTC (`datetime.now(UTC)` ở Bronze); các cột ngày nghiệp vụ (`order_date`, `effective_date`...) giả định là ngày dương lịch không có thông tin múi giờ (naive date, không phải datetime có tz) — nếu nguồn thật có giờ kèm múi giờ khác UTC, cần bổ sung xử lý riêng (ngoài phạm vi capstone hiện tại, ghi nhận làm known limitation).
+
 ### 🛠️ Technical Notes
 
 Cột cần cast: `unit_price, gross_amount, net_amount, discount_amount, quantity, target_revenue, ...` (theo Data Dictionary từng nguồn); cột ngày: `order_date, return_date, effective_date, join_date, launch_date, start_date, end_date...`
+
+#### SUBTASK — Validate required columns (lớp phòng vệ thứ 2) + mapping format ngày theo từng nguồn  _[SỬA — schema-drift gate CHÍNH đã dời sang Bronze P1.2]_
+
+**Labels:** backend, phase-2, sprint-2 | **Priority:** High
+
+**Goal:** Lớp phòng vệ thứ 2 (defense-in-depth) — gate CHÍNH chặn schema drift giờ nằm ở Bronze (`parser.validate_schema()`, P1.2), nên về lý thuyết Silver không còn nhận được file thiếu cột từ nguồn nữa. Subtask này giữ lại để bắt lỗi nội bộ (VD sửa code Bronze làm rớt cột lineage, bug trong `cast_to_string()`...), và để xác định ĐÚNG format ngày cho từng nguồn thay vì giả định 1 format chung.
+**Input Spec:** `data/bronze/<run_date>/*.parquet`, Data Dictionary (BRD §2.2), sample file thật của từng nguồn (mở tay để xác nhận format ngày viết theo kiểu gì — không đoán).
+**Output/Deliverable:** `DATE_FORMAT_BY_SOURCE: dict[str, dict[str, str]]` (nguồn → {tên cột ngày: format string}) trong `config/sources.py`; hàm `validate_required_columns(df, source_name)` raise lỗi rõ tên cột+nguồn nếu thiếu cột bắt buộc (tái dùng `REQUIRED_COLUMNS`/`SchemaMismatchError` đã khai báo ở P1.2, không định nghĩa 1 cấu trúc dict thứ 2 song song).
+**Tech Stack:** Polars, Python dict config.
+**File(s):** `config/sources.py`, `src/transform_silver.py`
+**Technical Steps:**
+1. Mở sample file thật từng nguồn (không phải đoán) xác nhận cột ngày viết theo format gì (VD CSV có thể `DD/MM/YYYY`, cột ngày từ Excel sau khi Bronze cast String thường ra ISO `YYYY-MM-DD` hoặc `YYYY-MM-DD HH:MM:SS`)
+2. Khai báo `DATE_FORMAT_BY_SOURCE` trong `config/sources.py`, 1 format riêng cho từng cột ngày của từng nguồn
+3. `validate_required_columns(df, source_name)`: import + tái dùng `REQUIRED_COLUMNS` (P1.2) — so `df.columns` với danh sách đó, raise `SchemaMismatchError` (cùng exception class Bronze, không tạo `ValueError` riêng) liệt kê cột thiếu + tên nguồn nếu lệch
+4. Gọi `validate_required_columns()` NGAY ĐẦU transform mỗi nguồn, trước bất kỳ bước cast nào — nếu bắt được lỗi ở đây tức là có bug ở tầng Bronze lọt qua, log mức WARNING nhấn mạnh "lẽ ra phải bị chặn từ Bronze"
+**Acceptance Criteria:** Xóa/đổi tên 1 cột bắt buộc trong file Bronze test → pipeline dừng với lỗi nêu rõ tên cột + tên nguồn, không cast tiếp; `DATE_FORMAT_BY_SOURCE` có entry cho toàn bộ cột ngày liệt kê ở Technical Notes.
+**💡 Vì sao cần:** Không làm → nếu Bronze lỡ có bug làm rớt mất cột, hoặc format ngày đoán sai (VD nhầm ngày Việt Nam DD/MM/YYYY với ngày Mỹ MM/DD/YYYY), toàn bộ cột ngày parse ra sai/NULL hàng loạt mà không ai phát hiện — báo cáo doanh thu theo tháng sẽ sai âm thầm. Có nó → xác nhận đúng format thật (không đoán) cho từng nguồn, và có lớp chặn dự phòng nếu Bronze lỡ có bug lọt qua.
 
 #### SUBTASK — Strip thousand-separator + cast money/qty cols to Float64/Int64
 
@@ -1594,30 +1803,36 @@ Cột cần cast: `unit_price, gross_amount, net_amount, discount_amount, quanti
 **File(s):** `src/transform_silver.py`
 **Technical Steps:** `pl.col(col).str.replace_all(",", "").cast(pl.Float64)` cho từng cột tiền/số lượng ở tất cả 10 nguồn liên quan.
 **Acceptance Criteria:** `df.schema["net_amount"] == pl.Float64`.
+**💡 Vì sao cần:** Không làm → cột tiền còn ở dạng chữ (String "1,000,000") thì không cộng/tính tổng doanh thu được, mà cast thẳng sang số cũng lỗi vì dấu phẩy không phải ký tự số. Có nó → cột tiền/số lượng thành số thật, Data Analyst tính tổng/trung bình bình thường không cần convert tay.
 
-#### SUBTASK — Cast date columns to pl.Date/Datetime
+#### SUBTASK — Cast date columns to pl.Date/Datetime theo format riêng từng nguồn  _[SỬA]_
 
 **Labels:** backend, phase-2, sprint-2 | **Priority:** Medium
 
-**Goal:** Chuyển cột ngày từ String sang Date/Datetime chuẩn Polars.
-**Input Spec:** Bronze DataFrame, cột String như `order_date`, `join_date`, `effective_date`.
-**Output/Deliverable:** Cột ngày kiểu `pl.Date`/`pl.Datetime`.
+**Goal:** Chuyển cột ngày từ String sang Date/Datetime chuẩn Polars, dùng ĐÚNG format của từng nguồn (không hardcode 1 format chung).
+**Input Spec:** Bronze DataFrame, cột String như `order_date`, `join_date`, `effective_date`; `DATE_FORMAT_BY_SOURCE` (subtask trước).
+**Output/Deliverable:** Cột ngày kiểu `pl.Date`/`pl.Datetime`; log tỷ lệ NULL sinh ra sau parse (theo cột).
 **Tech Stack:** Polars.
 **File(s):** `src/transform_silver.py`
-**Technical Steps:** `pl.col(col).str.strptime(pl.Date, "%Y-%m-%d", strict=False)` cho từng cột ngày ở tất cả nguồn liên quan.
-**Acceptance Criteria:** `df.schema["order_date"] == pl.Date`.
+**Technical Steps:**
+1. Tra `fmt = DATE_FORMAT_BY_SOURCE[source_name][col]` cho từng cột ngày — KHÔNG dùng 1 `"%Y-%m-%d"` cứng cho toàn bộ 10 nguồn
+2. `pl.col(col).str.strptime(pl.Date, fmt, strict=False)`
+3. Log `df[col].is_null().sum() / df.height` sau parse — cảnh báo nếu tỷ lệ NULL bất thường (nghi format sai, không phải data rác thật)
+**Acceptance Criteria:** `df.schema["order_date"] == pl.Date` cho cả nguồn CSV lẫn Excel; đổi format sai cho 1 nguồn trong test → tỷ lệ NULL log ra rõ ràng cao bất thường, không âm thầm trôi qua.
+**💡 Vì sao cần:** Không làm → dùng chung 1 format ngày cho cả 10 nguồn, trong khi nguồn CSV và Excel viết ngày khác kiểu nhau — nguồn nào lệch format sẽ bị parse sai thành NULL hàng loạt mà không báo lỗi gì (Polars âm thầm trả NULL). Có nó → mỗi nguồn dùng đúng format của nó, và có cảnh báo nếu tỷ lệ NULL bất thường để phát hiện sớm nếu format sai.
 
-#### SUBTASK — Verify amount dtype == Float64
+#### SUBTASK — pytest test_transform_silver.py: verify dtype + format ngày đúng  _[SỬA]_
 
 **Labels:** backend, phase-2, sprint-2 | **Priority:** Medium
 
-**Goal:** Xác nhận kết quả cast đúng yêu cầu AC của phase2_silver_cleansing.md.
-**Input Spec:** DataFrame đã cast (2 subtask trước).
-**Output/Deliverable:** Check thủ công/log xác nhận dtype đúng cho toàn bộ 10 nguồn.
-**Tech Stack:** Polars, manual check hoặc pytest nhanh.
-**File(s):** N/A (verification step)
-**Technical Steps:** Load lại từng file Silver, in `df.schema`, so với danh sách cột kỳ vọng.
-**Acceptance Criteria:** Toàn bộ cột tiền/số lượng là Float64/Int64, toàn bộ cột ngày là Date/Datetime, không còn String ở các cột này.
+**Goal:** Test tự động thay cho check thủ công — khớp yêu cầu Epic 2 DOD (`tests/test_transform_silver.py`).
+**Input Spec:** DataFrame đã cast (2 subtask trước), fixture nhỏ giả lập cả nguồn CSV-style và Excel-style date string.
+**Output/Deliverable:** `tests/test_transform_silver.py` — test cast tiền/số lượng, test cast ngày cho ít nhất 1 nguồn CSV + 1 nguồn Excel (2 format khác nhau).
+**Tech Stack:** pytest, Polars.
+**File(s):** `tests/test_transform_silver.py`
+**Technical Steps:** Tạo fixture DataFrame nhỏ mô phỏng cả 2 kiểu format ngày, gọi hàm cast, assert dtype + giá trị đúng, assert `validate_required_columns()` raise đúng khi thiếu cột.
+**Acceptance Criteria:** `uv run pytest tests/test_transform_silver.py` pass 100%; toàn bộ cột tiền/số lượng là Float64/Int64, toàn bộ cột ngày là Date/Datetime, không còn String ở các cột này.
+**💡 Vì sao cần:** Không làm → chỉ "check thủ công" bằng mắt 1 lần lúc code xong, ai đó sửa code sau này (kể cả chính mình) làm hỏng logic cast mà không ai biết cho tới khi ra báo cáo sai số. Có nó → test tự động chạy lại mỗi lần sửa code, phát hiện ngay nếu có gì hỏng thay vì đợi phát hiện ở báo cáo cuối.
 
 ---
 
@@ -1713,6 +1928,7 @@ NULL business key handling (P2.3)
 **File(s):** `src/transform_silver.py`
 **Technical Steps:** `pl.col(col).str.strip_chars().str.to_uppercase()` cho các cột text nghiệp vụ (không áp dụng cho cột ID/tên riêng nếu cần giữ nguyên case).
 **Acceptance Criteria:** Không còn khoảng trắng đầu/cuối; giá trị text đồng nhất chữ hoa.
+**💡 Vì sao cần:** Không làm → 2 dòng cùng ý nghĩa (`" Miền Bắc "` và `"MIỀN BẮC"`) bị coi là 2 giá trị khác nhau khi group_by/join ở Gold — báo cáo tính sai vì bị tách lẻ thay vì gộp lại. Có nó → mọi biến thể viết hoa/thường, khoảng trắng thừa đều quy về 1 dạng chuẩn, group_by/join ra đúng số.
 
 #### SUBTASK — Drop duplicate rows in customer_master + other sources
 
@@ -1725,6 +1941,7 @@ NULL business key handling (P2.3)
 **File(s):** `src/transform_silver.py`
 **Technical Steps:** `df.unique()` áp dụng cho toàn bộ 10 nguồn, ưu tiên kiểm tra kỹ `customer_master` (theo BRD báo có trùng lặp thật).
 **Acceptance Criteria:** `df.shape[0] == df.unique().shape[0]` sau bước này (không còn giảm thêm khi unique lại).
+**💡 Vì sao cần:** Không làm → nhân viên lỡ tay up lại file cũ, khách hàng bị đếm/tính doanh thu 2 lần trong báo cáo (BRD xác nhận đây là vấn đề thật đang gặp). Có nó → dòng trùng lặp 100% chỉ còn giữ lại 1 bản, số liệu không bị thổi phồng.
 
 #### SUBTASK — Drop/handle rows with NULL customer_id/product_id keys
 
@@ -1737,6 +1954,7 @@ NULL business key handling (P2.3)
 **File(s):** `src/transform_silver.py`
 **Technical Steps:** `df.filter(pl.col("customer_id").is_not_null())` (tương tự cho `product_id`, `employee_id` tùy nguồn); log số dòng bị loại vào console.
 **Acceptance Criteria:** Không còn dòng NULL ở cột khóa chính của từng nguồn liên quan (`sales_transactions`, `return_transactions`...).
+**💡 Vì sao cần:** Không làm → dòng giao dịch thiếu mã khách hàng/sản phẩm thì tới Gold không join được vào Dim nào cả, hoặc join sai lung tung. Có nó → loại bỏ sớm những dòng chắc chắn không dùng được, tránh để lỗi trôi xuống bước join phức tạp hơn ở Gold mới phát hiện.
 
 ---
 
@@ -1832,6 +2050,7 @@ Xử lý NULL ở các cột/bảng khác (không nằm trong AC gốc của pha
 **File(s):** `src/transform_silver.py`
 **Technical Steps:** `df.with_columns(pl.col("tax_code").fill_null("UNKNOWN"))`.
 **Acceptance Criteria:** `df.filter(pl.col("tax_code").is_null()).shape[0] == 0`.
+**💡 Vì sao cần:** Không làm → báo cáo/dashboard lọc theo `tax_code` bị thiếu dữ liệu ở những dòng NULL, hoặc join/group_by hiểu nhầm NULL là "không có nhóm" thay vì 1 nhóm rõ ràng. Có nó → mọi khách hàng đều có giá trị `tax_code` xác định (kể cả khi thật sự không có thông tin, đánh dấu rõ "UNKNOWN"), không có ô trống gây lỗi khi xử lý tiếp.
 
 ---
 
@@ -1927,6 +2146,7 @@ Dimensional modeling (Epic 3)
 **File(s):** `src/transform_silver.py`
 **Technical Steps:** `os.makedirs(f"data/silver/{run_date}", exist_ok=True)` → `df.write_parquet(...)` cho từng nguồn.
 **Acceptance Criteria:** `data/silver/<run_date>/` có đủ 10 file `.parquet`.
+**💡 Vì sao cần:** Không làm → dữ liệu đã làm sạch chỉ nằm trong bộ nhớ tạm, tắt chương trình là mất, Epic 3 (Gold) không có gì để đọc vào. Có nó → dữ liệu sạch được lưu lại thành file, Gold layer (và bất kỳ ai khác) đọc lại được bất cứ lúc nào không cần chạy lại từ đầu.
 
 #### SUBTASK — Idempotency check: rerun same run_date, no duplication/append
 
@@ -1939,6 +2159,7 @@ Dimensional modeling (Epic 3)
 **File(s):** `data/silver/<run_date>/`
 **Technical Steps:** Chạy `--layer silver --run-date X` 2 lần liên tiếp → so sánh row count trước/sau.
 **Acceptance Criteria:** Row count 10 file không đổi giữa 2 lần chạy.
+**💡 Vì sao cần:** Không làm → không chắc chắn Silver có bị lỗi nhân đôi dữ liệu khi chạy lại hay không (VD do quên ghi đè, chỉ append thêm) — nếu có bug thì báo cáo Gold sau này sẽ sai gấp đôi mà không biết vì sao. Có nó → có bằng chứng cụ thể xác nhận chạy lại bao nhiêu lần cũng ra đúng 1 kết quả.
 
 ---
 
@@ -1957,6 +2178,8 @@ Dimensional modeling (Epic 3)
 
     * \[ \] Đủ Dimension (`dim_customers`, `dim_products`, `dim_distributors`, `dim_date`, `dim_territory`, `dim_promotion`, `dim_employees` SCD2) + Fact (`fact_sales`, `fact_targets`, `fact_returns`, `fact_distributor_orders`) + `mart_sales_vs_target`
     * \[ \] `dim_employees` SCD2 trả đúng `region` hiệu lực tại `order_date` (US-06)
+    * \[ \] Không FK nào NULL trên bất kỳ Fact table nào — chỉ key thật hoặc `-1` (Unknown Member)
+    * \[ \] Cột PII (`phone/address/tax_code/date_of_birth`) không xuất hiện trong bất kỳ file nào ở `data/gold/<run_date>/`
     * \[ \] `uv run pytest test_pipeline.py` pass 100% (≥2 test: Data Mart logic, SCD2 logic)
     * \[ \] `uv run main.py --layer all --run-date <date>` chạy full pipeline Google Drive → Gold trong 1 lệnh
     
@@ -1993,6 +2216,7 @@ N/A (Production Impact: Không)
 
 * \[2026-07-26\] Sprint 3 neo ngày theo README (Phase 3 bắt đầu cuối Tuần 4 = 2026-08-22, deadline "Bế giảng"). Ngày Bế giảng chính xác chưa được cung cấp trong tài liệu → dùng 2026-08-24 làm due date tạm (buffer 2 ngày), CẦN PO xác nhận lại ngày Bế giảng thật khi biết — Người duyệt: PO (placeholder, cần xác nhận lại)
 * \[2026-07-26\] Employee_key/surrogate keys cho các bảng Dim sinh bằng row index/hash đơn giản (không dùng sequence generator ngoài) vì đây là batch build lại toàn bộ Gold mỗi run, không phải incremental warehouse — Người duyệt: PO
+* \[2026-08-02\] **Quyết định — KHÔNG partition bên trong `fact_sales`/`fact_returns` theo cột (VD `year`/`month`) ở phạm vi capstone này.** Lý do: mỗi `run_date` đã là 1 thư mục Parquet riêng (`data/gold/<run_date>/`), và data mẫu (FMCG 1 công ty, vài tháng) không đủ lớn để full-scan trở thành vấn đề thật — thêm sub-partition bây giờ là tối ưu hoá sớm không có số đo hiệu năng làm căn cứ. Ghi nhận đây là điểm cần làm khi data lớn dần thật (không phải bị bỏ sót/quên) — Người duyệt: PO
 
 ---
 
@@ -2048,6 +2272,7 @@ N/A (Production Impact: Không)
 
 * \[ \] **Scenario 1 (Happy path):** Given Silver `customer_master`/`product_master`/`distributor_master`, When build Dim, Then mỗi Dim có surrogate key duy nhất, số dòng khớp entity gốc
 * \[ \] **Scenario 2 (Error/Exception):** Given `product_master` có sản phẩm trùng `product_id` (data lỗi giả lập), When build `dim_products`, Then dedup theo `product_id` trước khi sinh surrogate key, không tạo 2 key cho cùng 1 sản phẩm
+* \[ \] **Scenario 3 (Kiến trúc — bắt buộc quyết định trước khi code P3.3/P3.4):** Given 1 dòng Fact có business key (`customer_id`/`product_id`/...) không tồn tại trong Dim tương ứng (data trễ, Dim chưa build kịp, hoặc data rác), When join Fact→Dim, Then FK trỏ về dòng **"Unknown Member"** (surrogate key = `-1`) đã có sẵn trong Dim đó — KHÔNG để FK NULL. Lý do: NULL FK làm Power BI coi là 1 "blank" chung cho mọi lý do lỗi khác nhau (data trễ vs data rác vs dim chưa build đều gộp lẫn), trong khi `-1` là 1 key tường minh, filter/drill-down được, đúng chuẩn Kimball "Unknown Member"
 
 ---
 
@@ -2075,7 +2300,7 @@ N/A
 
 ### 🛠️ Technical Notes
 
-Surrogate key: `df.with_row_index("customer_key")` hoặc tương đương.
+Surrogate key: `df.with_row_index("customer_key")` hoặc tương đương, cộng `+1` để dành `0` không dùng và bắt đầu key thật từ `1` — dòng "Unknown Member" luôn cố định `-1` (xem subtask riêng bên dưới), không lẫn với key thật.
 
 #### SUBTASK — dim_customers + dim_products build w/ surrogate keys
 
@@ -2086,8 +2311,9 @@ Surrogate key: `df.with_row_index("customer_key")` hoặc tương đương.
 **Output/Deliverable:** DataFrame `dim_customers`, `dim_products` với surrogate key.
 **Tech Stack:** Polars.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** Select cột mô tả, dedup theo business key, `with_row_index()` sinh `customer_key`/`product_key`.
+**Technical Steps:** Select cột mô tả, dedup theo business key, `with_row_index()` sinh `customer_key`/`product_key` (bắt đầu từ `1`).
 **Acceptance Criteria:** Mỗi Dim có key duy nhất, không trùng business key.
+**💡 Vì sao cần:** Không làm → Data Analyst muốn xem doanh số theo khách hàng/sản phẩm phải tự viết JOIN phức tạp trên Silver mỗi lần truy vấn. Có nó → có sẵn bảng "danh mục" gọn gàng, join vào Fact chỉ cần 1 dòng SQL/DAX đơn giản.
 
 #### SUBTASK — dim_distributors build w/ surrogate keys
 
@@ -2098,8 +2324,27 @@ Surrogate key: `df.with_row_index("customer_key")` hoặc tương đương.
 **Output/Deliverable:** DataFrame `dim_distributors` với `distributor_key`.
 **Tech Stack:** Polars.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** Select cột mô tả, dedup theo `distributor_id`, sinh surrogate key.
+**Technical Steps:** Select cột mô tả, dedup theo `distributor_id`, sinh surrogate key (bắt đầu từ `1`).
 **Acceptance Criteria:** `dim_distributors` có key duy nhất, số dòng khớp số NPP thật.
+**💡 Vì sao cần:** Không làm → không có bảng riêng cho nhà phân phối, phân tích hiệu suất NPP phải join thẳng vào Silver mỗi lần. Có nó → có bảng chiều NPP sẵn sàng, join vào `fact_distributor_orders` dễ dàng ở Gold.
+
+#### SUBTASK — Thêm dòng "Unknown Member" (key = -1) vào mọi Dim  _[MỚI]_
+
+**Labels:** db, phase-3, sprint-3 | **Priority:** High
+
+**Goal:** Chốt kiến trúc xử lý FK không match (Scenario 3) — mọi Dim table trong Gold phải có sẵn 1 dòng "Unknown Member" trước khi P3.3/P3.4 join vào Fact, nếu không join sẽ không có gì để trỏ tới.
+**Input Spec:** `dim_customers`, `dim_products`, `dim_distributors` (2 subtask trên), `dim_territory`, `dim_promotion` (P3.4).
+**Output/Deliverable:** Mỗi Dim có thêm đúng 1 dòng: surrogate key = `-1`, business key (`customer_id`/`product_id`/...) = `"UNKNOWN"`, các cột mô tả khác = `"Unknown"`/NULL tùy loại.
+**Tech Stack:** Polars `pl.concat()`.
+**File(s):** `src/transform_gold.py`
+**Technical Steps:**
+1. Viết 1 helper `add_unknown_member(df, key_col, business_key_col)` dùng chung cho mọi Dim — tránh lặp code 5 lần
+2. `pl.concat([unknown_row_df, df])` — Unknown Member luôn ở dòng đầu, key `-1` cố định
+3. Áp dụng cho `dim_customers, dim_products, dim_distributors, dim_territory, dim_promotion` (P3.1/P3.4) — mọi Dim có business key tra từ nguồn ngoài đều cần
+4. `dim_employees` (SCD2, P3.2) cũng thêm 1 dòng Unknown Member tĩnh: `employee_key=-1`, `employee_id="UNKNOWN"`, `valid_from=NULL`, `valid_to=NULL`, `is_current=False` — dùng làm fallback khi as-of join P3.3 Scenario 3 không match version nào (nhân viên nghỉ việc/không tồn tại), KHÔNG cố join theo range cho dòng này
+5. `dim_date` KHÔNG cần Unknown Member — quyết định: mọi `order_date` sau khi qua Silver P2.1 (validate + parse đúng format) luôn là ngày hợp lệ, không có case "ngày không match dim_date"
+**Acceptance Criteria:** `dim_customers.filter(pl.col("customer_key") == -1)` trả đúng 1 dòng "Unknown Member"; áp dụng đủ cho `dim_customers, dim_products, dim_distributors, dim_territory, dim_promotion, dim_employees`.
+**💡 Vì sao cần:** Không làm → khi 1 đơn hàng có `customer_id` không tìm thấy trong `dim_customers` (data trễ, data rác), FK phải để trống (NULL) — Power BI gộp hết mọi lý do lỗi khác nhau vào chung 1 nhóm "blank", không phân biệt được data trễ hay data rác. Có nó → có 1 dòng "không xác định" rõ ràng với key cố định `-1`, filter/lọc riêng ra được, không lẫn với các trường hợp NULL khác trong hệ thống.
 
 #### SUBTASK — dim_date generate calendar dimension
 
@@ -2112,6 +2357,23 @@ Surrogate key: `df.with_row_index("customer_key")` hoặc tương đương.
 **File(s):** `src/transform_gold.py`
 **Technical Steps:** `pl.date_range(min_date, max_date, "1d")` → derive các cột day/month/quarter/year.
 **Acceptance Criteria:** `dim_date` phủ đủ khoảng ngày xuất hiện trong `fact_sales`.
+**💡 Vì sao cần:** Không làm → muốn lọc/group theo quý, tháng, thứ trong tuần phải tự tính lại mỗi lần từ cột ngày thô. Có nó → có sẵn bảng ngày tháng với đủ thông tin (ngày/tháng/quý/năm), Power BI chỉ cần kéo-thả là lọc/group theo thời gian được ngay.
+
+#### SUBTASK — Drop cột PII khỏi Gold Dim tables (thay vì rà soát tay lúc share)  _[MỚI]_
+
+**Labels:** db, pii, compliance-nd13, phase-3, sprint-3 | **Priority:** High
+
+**Goal:** Kiểm soát PII bằng kiến trúc (không sinh ra dữ liệu nhạy cảm ở Gold) thay vì kiểm soát bằng quy trình tay (review `.pbix` trước khi share, P4.1). Rủi ro nếu chỉ rà soát ở P4.1: ai có quyền đọc file `data/gold/<run_date>/*.parquet` trực tiếp trên đĩa (không qua Power BI) vẫn thấy PII nguyên vẹn — review `.pbix` không bảo vệ được file Parquet gốc.
+**Input Spec:** `dim_customers`, `dim_employees`, `dim_distributors` (đã build, các subtask trên + P3.2) — cột PII theo Data Dictionary: `phone, address, tax_code, date_of_birth`.
+**Output/Deliverable:** 3 Dim trên KHÔNG còn cột PII thô khi ghi ra `data/gold/<run_date>/` — Silver (`data/silver/`) vẫn giữ nguyên PII cho nhu cầu nội bộ khác (nếu có), chỉ Gold (lớp phục vụ BI, dễ bị đọc/share ngoài) bị cắt.
+**Tech Stack:** Polars `.drop()`.
+**File(s):** `src/transform_gold.py`
+**Technical Steps:**
+1. Khai báo `PII_COLUMNS_TO_DROP: dict[str, list[str]]` trong `config/sources.py` (per-Dim danh sách cột PII cần drop trước khi ghi Gold)
+2. Áp dụng `.drop(PII_COLUMNS_TO_DROP[dim_name])` ngay trước bước ghi `write_parquet()` cho từng Dim liên quan — không sớm hơn (Dim vẫn cần các cột này để dedup/build key ở bước trước), không muộn hơn (không để lọt ra file Parquet)
+3. Nếu 1 use case Gold thật sự cần 1 cột PII cụ thể (chưa phát sinh ở BRD hiện tại), phải là quyết định tường minh thêm vào ngoại lệ có ghi chú — không mặc định giữ lại
+**Acceptance Criteria:** `pl.read_parquet('data/gold/<run_date>/dim_customers.parquet').columns` không chứa `phone/address/tax_code/date_of_birth`; tương tự cho `dim_employees`/`dim_distributors`; `data/silver/` vẫn còn đủ cột gốc (không ảnh hưởng Silver).
+**💡 Vì sao cần:** Không làm → thông tin cá nhân khách hàng/nhân viên (số điện thoại, địa chỉ, ngày sinh) nằm nguyên trong file Gold — ai đọc được file đó (không cần mở Power BI) đều thấy hết, kể cả khi share file `.pbix` cho người ngoài xem thì cũng không bảo vệ được. Có nó → thông tin nhạy cảm bị cắt trước khi ra khỏi Silver, dù ai đọc file Gold trực tiếp cũng không thấy được.
 
 ---
 
@@ -2132,7 +2394,7 @@ Surrogate key: `df.with_row_index("customer_key")` hoặc tương đương.
 ### 🔄 End-to-End Data Flow Definition
 
 * **📥 Input:** `data/silver/<run_date>/employee_master.parquet` (có `version`, `effective_date`, `resign_date`, `transfer_note`)
-* **⚙️ Processing:** Sort theo `employee_id`+`effective_date` → dùng `shift()`/`over()` tính `valid_to` = `effective_date` kế tiếp cùng nhân viên; `is_current` = dòng mới nhất
+* **⚙️ Processing:** Sort theo `employee_id`+`effective_date` → `valid_from` = `effective_date` của chính version đó → `valid_to` = `effective_date` version kế tiếp cùng nhân viên (`shift(-1).over()`), NHƯNG nếu nhân viên có `resign_date` và đây là version cuối (không có version kế tiếp), `valid_to` = `resign_date` chứ KHÔNG để NULL — nếu không, as-of join ở P3.3 sẽ coi version đã nghỉ việc là "còn hiệu lực vô thời hạn" và gán nhầm đơn hàng phát sinh sau ngày nghỉ việc vào nhân viên đó; `is_current` = `valid_to.is_null()` (sau khi đã coalesce với `resign_date`, không cần điều kiện `resign_date.is_null()` riêng nữa)
 * **📤 Output:** `dim_employees` với `employee_key, employee_id, name, region, team, valid_from, valid_to, is_current`
 
 ---
@@ -2166,7 +2428,8 @@ Surrogate key: `df.with_row_index("customer_key")` hoặc tương đương.
 ### ✅ Acceptance Criteria
 
 * \[ \] **Scenario 1 (Happy path):** Given nhân viên X có 2 version (chuyển vùng giữa chừng), When build SCD2, Then version cũ có `valid_to` = ngày version mới bắt đầu, `is_current=False`; version mới `valid_to=NULL`, `is_current=True`
-* \[ \] **Scenario 2 (Error/Exception):** Given nhân viên đã `resign_date` (nghỉ việc), When build SCD2, Then `is_current=False` dù là version cuối cùng (không đánh dấu current cho nhân viên đã nghỉ)
+* \[ \] **Scenario 2 (Error/Exception):** Given nhân viên đã `resign_date` (nghỉ việc), When build SCD2, Then version cuối cùng có `valid_to = resign_date` (KHÔNG phải NULL), `is_current=False`
+* \[ \] **Scenario 3 (Error/Exception):** Given nhân viên đã nghỉ việc ngày X, có đơn hàng phát sinh SAU ngày X (data rác hoặc case hợp lệ khác), When as-of join `order_date` vào `dim_employees` (P3.3), Then đơn hàng đó KHÔNG match được version đã nghỉ việc (vì `valid_to=resign_date` đã chặn đúng), `employee_key = -1` (Unknown Member, xem P3.1 Scenario 3) thay vì gán nhầm nhân viên nghỉ việc hoặc để NULL
 
 ---
 
@@ -2194,31 +2457,46 @@ Join `dim_employees` vào `fact_sales` theo `order_date` (xem P3.3)
 
 ### 🛠️ Technical Notes
 
-`df.sort(["employee_id", "effective_date"]).with_columns(pl.col("effective_date").shift(-1).over("employee_id").alias("valid_to"))`. Test riêng ở P3.7.
+```
+df = df.sort(["employee_id", "effective_date"]).with_columns(
+    pl.col("effective_date").alias("valid_from"),
+    pl.col("effective_date").shift(-1).over("employee_id").alias("_next_effective_date"),
+).with_columns(
+    pl.coalesce(["_next_effective_date", "resign_date"]).alias("valid_to")
+).with_columns(
+    pl.col("valid_to").is_null().alias("is_current")
+).drop("_next_effective_date")
+```
+Điểm mấu chốt: `valid_to` PHẢI coalesce với `resign_date` — nếu chỉ lấy `shift(-1)` suông thì version cuối của nhân viên đã nghỉ việc bị NULL (hiệu lực vô thời hạn), phá as-of join ở P3.3. Test riêng ở P3.7.
 
-#### SUBTASK — Sort by employee_id+effective_date, compute valid_to via shift()
+#### SUBTASK — Sort by employee_id+effective_date, compute valid_from/valid_to (coalesce resign_date)  _[SỬA]_
 
 **Labels:** db, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Tính `valid_to` cho từng version nhân viên.
-**Input Spec:** `data/silver/<run_date>/employee_master.parquet` (có `version`, `effective_date`).
-**Output/Deliverable:** DataFrame có cột `valid_to`.
-**Tech Stack:** Polars `shift().over()`.
+**Goal:** Tính `valid_from`/`valid_to` cho từng version nhân viên — bao gồm đúng case nghỉ việc.
+**Input Spec:** `data/silver/<run_date>/employee_master.parquet` (có `version`, `effective_date`, `resign_date`).
+**Output/Deliverable:** DataFrame có cột `valid_from`, `valid_to`.
+**Tech Stack:** Polars `shift().over()`, `pl.coalesce()`.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** `df.sort(["employee_id","effective_date"]).with_columns(pl.col("effective_date").shift(-1).over("employee_id").alias("valid_to"))`.
-**Acceptance Criteria:** Version cũ có `valid_to` = `effective_date` version kế tiếp cùng nhân viên.
+**Technical Steps:**
+1. `valid_from = effective_date` (trực tiếp, không tính toán thêm)
+2. `_next_effective_date = effective_date.shift(-1).over("employee_id")`
+3. `valid_to = pl.coalesce(["_next_effective_date", "resign_date"])` — version cuối của nhân viên ĐANG làm (`resign_date` NULL) thì `valid_to` vẫn NULL đúng như kỳ vọng; version cuối của nhân viên ĐÃ nghỉ thì `valid_to = resign_date`, không NULL
+**Acceptance Criteria:** Version cũ (không phải cuối) có `valid_to` = `effective_date` version kế tiếp; version cuối cùng của nhân viên đã nghỉ có `valid_to = resign_date` (không phải NULL); version cuối cùng của nhân viên đang làm có `valid_to = NULL`.
+**💡 Vì sao cần:** Không làm → nếu chỉ lấy version kế tiếp mà quên tính ngày nghỉ việc, nhân viên đã nghỉ sẽ bị coi là "còn hiệu lực vô thời hạn" — đơn hàng phát sinh SAU khi người đó đã nghỉ việc thật vẫn bị tính vào doanh số của họ, báo cáo hiệu suất nhân viên sai. Có nó → biết chính xác nhân viên nào phụ trách vùng nào tại đúng thời điểm nào, kể cả sau khi họ đã nghỉ việc.
 
-#### SUBTASK — Derive is_current flag
+#### SUBTASK — Derive is_current flag  _[SỬA]_
 
 **Labels:** db, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Đánh dấu version hiện hành của mỗi nhân viên (và loại trừ nhân viên đã nghỉ).
-**Input Spec:** DataFrame có `valid_to` (subtask trước), cột `resign_date`.
+**Goal:** Đánh dấu version hiện hành của mỗi nhân viên.
+**Input Spec:** DataFrame có `valid_to` đã coalesce với `resign_date` (subtask trước).
 **Output/Deliverable:** Cột `is_current` (Boolean).
 **Tech Stack:** Polars.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** `is_current = valid_to.is_null() & resign_date.is_null()`.
+**Technical Steps:** `is_current = valid_to.is_null()` — vì `valid_to` đã coalesce với `resign_date` ở subtask trước, không cần điều kiện `resign_date.is_null()` riêng nữa (đơn giản hơn bản cũ, tránh 2 nguồn sự thật cho cùng 1 kết luận).
 **Acceptance Criteria:** Nhân viên đã `resign_date` không có version nào `is_current=True`.
+**💡 Vì sao cần:** Không làm → không biết version nào là "hiện tại" của mỗi nhân viên, khó lấy đúng thông tin mới nhất (vùng/team hiện tại) khi cần. Có nó → chỉ cần lọc `is_current=True` là ra đúng trạng thái mới nhất của từng người, và người đã nghỉ việc không bị nhầm là đang hoạt động.
 
 #### SUBTASK — Generate surrogate employee_key
 
@@ -2231,18 +2509,20 @@ Join `dim_employees` vào `fact_sales` theo `order_date` (xem P3.3)
 **File(s):** `src/transform_gold.py`
 **Technical Steps:** `df.with_row_index("employee_key")`.
 **Acceptance Criteria:** Mỗi dòng (mỗi version nhân viên) có `employee_key` riêng biệt, không trùng.
+**💡 Vì sao cần:** Không làm → 1 nhân viên có nhiều version (do đổi vùng) nhưng dùng chung `employee_id` để join thì không phân biệt được đơn hàng thuộc version nào — join lung tung, sai vùng. Có nó → mỗi version là 1 dòng độc lập với khóa riêng, join đúng chính xác version tại thời điểm cần.
 
-#### SUBTASK — Unit test SCD2 valid_to correctness (small fixture)
+#### SUBTASK — Unit test SCD2 valid_to correctness, gồm case nghỉ việc (small fixture)  _[SỬA]_
 
 **Labels:** db, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Verify sớm logic SCD2 đúng trước khi P3.7 viết test chính thức.
-**Input Spec:** Fixture DataFrame nhỏ (2-3 dòng, 1 nhân viên đổi vùng).
-**Output/Deliverable:** Kết quả kiểm tra thủ công xác nhận `valid_to`/`is_current` đúng.
+**Goal:** Verify sớm logic SCD2 đúng trước khi P3.7 viết test chính thức — bắt buộc phải phủ case nghỉ việc, không chỉ case chuyển vùng.
+**Input Spec:** Fixture DataFrame nhỏ: (1) 1 nhân viên đổi vùng 2 version, (2) 1 nhân viên đã nghỉ việc (`resign_date` khác NULL).
+**Output/Deliverable:** Kết quả kiểm tra thủ công xác nhận `valid_from`/`valid_to`/`is_current` đúng cho cả 2 case.
 **Tech Stack:** Polars, python REPL/script tạm.
 **File(s):** N/A (dev verification, test chính thức ở P3.7)
-**Technical Steps:** Tạo DataFrame giả lập nhỏ, chạy hàm SCD2, in kết quả so sánh kỳ vọng.
-**Acceptance Criteria:** Kết quả khớp kỳ vọng tay trước khi coi P3.2 là Done.
+**Technical Steps:** Tạo DataFrame giả lập nhỏ gồm cả nhân viên đổi vùng và nhân viên nghỉ việc, chạy hàm SCD2, in kết quả so sánh kỳ vọng — đặc biệt kiểm `valid_to` của version cuối nhân viên nghỉ việc PHẢI = `resign_date`, không phải NULL.
+**Acceptance Criteria:** Kết quả khớp kỳ vọng tay cho cả 2 case trước khi coi P3.2 là Done.
+**💡 Vì sao cần:** Không làm → logic SCD2 khá rối (shift, coalesce, over) — code xong tưởng đúng nhưng chạy trên data thật mới lộ sai, lúc đó đã tốn công build cả Gold layer trên nền sai. Có nó → kiểm tra bằng data giả nhỏ, biết chắc đúng trước khi build tiếp lên trên (fact_sales phụ thuộc vào cái này).
 
 ---
 
@@ -2297,7 +2577,8 @@ Join `dim_employees` vào `fact_sales` theo `order_date` (xem P3.3)
 ### ✅ Acceptance Criteria
 
 * \[ \] **Scenario 1 (Happy path):** Given đơn hàng của nhân viên X đổi vùng giữa chừng, When join `fact_sales` với `dim_employees` SCD2, Then FK trỏ đúng `employee_key` có `region` hiệu lực tại `order_date` của đơn hàng đó (không phải vùng hiện tại)
-* \[ \] **Scenario 2 (Error/Exception):** Given 1 dòng `sales_transactions` có `customer_id` không tồn tại trong `dim_customers` (data rác), When join, Then FK NULL thay vì crash, dòng vẫn giữ trong fact để không mất doanh thu, có thể lọc riêng khi audit
+* \[ \] **Scenario 2 (Error/Exception):** Given 1 dòng `sales_transactions` có `customer_id` không tồn tại trong `dim_customers` (data rác), When join, Then `customer_key = -1` (Unknown Member, xem P3.1 Scenario 3) thay vì crash hoặc NULL, dòng vẫn giữ trong fact để không mất doanh thu, filter được `customer_key = -1` khi audit
+* \[ \] **Scenario 3 (Error/Exception):** Given nhân viên đã nghỉ việc (P3.2 đảm bảo `valid_to = resign_date`), When có đơn hàng phát sinh sau ngày nghỉ việc, Then as-of join KHÔNG match version đã nghỉ, `employee_key = -1` (Unknown Member) thay vì gán nhầm hoặc NULL
 
 ---
 
@@ -2325,31 +2606,36 @@ N/A
 
 ### 🛠️ Technical Notes
 
-As-of join SCD2: dùng `join_asof` của Polars hoặc filter điều kiện range join thủ công theo `order_date` nằm giữa `valid_from`/`valid_to`.
+As-of join SCD2: dùng `join_asof` của Polars hoặc filter điều kiện range join thủ công theo `order_date` nằm giữa `valid_from`/`valid_to`. Mọi join Fact→Dim trong story này dùng **left join** + `.fill_null(-1)` trên cột FK ngay sau join — không có FK nào được để NULL (xem P3.1 Scenario 3, "Unknown Member").
 
-#### SUBTASK — fact_sales join dim_customers/dim_products/dim_employees(SCD2)/dim_date
+#### SUBTASK — fact_sales join dim_customers/dim_products/dim_employees(SCD2)/dim_date  _[SỬA]_
 
 **Labels:** db, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Build `fact_sales` với đầy đủ FK, đặc biệt as-of join SCD2.
-**Input Spec:** `data/silver/<run_date>/sales_transactions.parquet` + `dim_customers`, `dim_products`, `dim_employees`, `dim_date`.
-**Output/Deliverable:** `fact_sales` với `customer_key, product_key, employee_key, date_key` đúng.
-**Tech Stack:** Polars `join`/`join_asof`.
+**Goal:** Build `fact_sales` với đầy đủ FK, đặc biệt as-of join SCD2, không FK nào để NULL.
+**Input Spec:** `data/silver/<run_date>/sales_transactions.parquet` + `dim_customers`, `dim_products`, `dim_employees`, `dim_date` (đã có dòng Unknown Member key=-1).
+**Output/Deliverable:** `fact_sales` với `customer_key, product_key, employee_key, date_key` đúng — FK không match trả `-1`, không trả NULL.
+**Tech Stack:** Polars `join(how="left")`/`join_asof`, `.fill_null(-1)`.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** Join thường với `dim_customers`/`dim_products`/`dim_date`; join SCD2 với `dim_employees` theo điều kiện `order_date` nằm trong `[valid_from, valid_to)`.
-**Acceptance Criteria:** Đơn hàng của nhân viên đổi vùng trỏ đúng `employee_key` có `region` hiệu lực tại `order_date`.
+**Technical Steps:** Left join với `dim_customers`/`dim_products`/`dim_date`, `.fill_null(-1)` trên `customer_key`/`product_key` ngay sau join; as-of join SCD2 với `dim_employees` theo điều kiện `order_date` nằm trong `[valid_from, valid_to)`, không match (hoặc match dòng Unknown Member tĩnh) thì `employee_key = -1`.
+**Acceptance Criteria:** Đơn hàng của nhân viên đổi vùng trỏ đúng `employee_key` có `region` hiệu lực tại `order_date`; không có dòng nào trong `fact_sales` có FK NULL — chỉ `-1` hoặc key thật.
+**💡 Vì sao cần:** Không làm → đây là bước biến giao dịch bán hàng thô thành bảng "trung tâm" của Star Schema — không join được vào Dim thì không xem được doanh số theo khách hàng/sản phẩm/nhân viên/ngày, cả mục tiêu Phase 3 (báo cáo doanh số theo vùng) không làm được. Có nó → mỗi giao dịch biết chính xác thuộc khách hàng nào, sản phẩm nào, nhân viên nào (đúng vùng tại thời điểm bán), ngày nào.
 
-#### SUBTASK — fact_targets join dim_employees/dim_date
+#### SUBTASK — fact_targets join dim_employees (as-of), giữ year/month riêng — KHÔNG ép qua dim_date  _[SỬA]_
 
 **Labels:** db, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Build `fact_targets` với FK.
-**Input Spec:** `data/silver/<run_date>/sales_target_plan.parquet` + `dim_employees`, `dim_date`.
-**Output/Deliverable:** `fact_targets` với `employee_key`, `date_key` (theo year/month).
+**Goal:** Build `fact_targets` với FK, quyết định dứt khoát cách xử lý lệch grain thay vì để "hoặc" tùy chọn lúc code.
+**Input Spec:** `data/silver/<run_date>/sales_target_plan.parquet` (grain tháng, có `year`, `month`) + `dim_employees` (SCD2, grain ngày).
+**Output/Deliverable:** `fact_targets` với `employee_key` (as-of join), giữ nguyên `year`, `month` làm cột thuộc tính — KHÔNG tạo `date_key` giả để ép join vào `dim_date` (grain ngày không khớp grain tháng của target).
 **Tech Stack:** Polars join.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** Join theo `employee_id`+`effective_from` range tương tự SCD2, hoặc join theo `employee_id` đơn giản nếu target không cần as-of (theo `plan_version`/`effective_from`/`effective_to` có sẵn trong data).
-**Acceptance Criteria:** `fact_targets` có FK hợp lệ, số dòng khớp `sales_target_plan` gốc.
+**Technical Steps:**
+1. As-of join `dim_employees` theo cùng cơ chế P3.3 subtask 1: dùng ngày đầu tháng (`date(year, month, 1)`) của target làm mốc so với `[valid_from, valid_to)` — nhất quán với cách `fact_sales` join `dim_employees`, không phải logic riêng thứ 2
+2. Không match (hoặc match dòng Unknown Member tĩnh) → `employee_key = -1`, không để NULL — cùng chuẩn P3.3/P3.4
+3. Giữ `year`, `month` (Int) làm cột thuộc tính trực tiếp trên `fact_targets` — Data Mart P3.5 group theo `region+month` dùng thẳng 2 cột này, không cần join `dim_date`
+**Acceptance Criteria:** `fact_targets` có `employee_key` hợp lệ theo đúng version SCD2 tại thời điểm target được set (hoặc `-1` nếu không match); số dòng khớp `sales_target_plan` gốc; không có cột `date_key` giả mạo trên `fact_targets`; không có FK NULL.
+**💡 Vì sao cần:** Không làm → không có bảng `target` (chỉ tiêu) join đúng với nhân viên, không so sánh được "thực tế vs chỉ tiêu" — mà đây chính là báo cáo chính giám đốc yêu cầu (mart_sales_vs_target). Có nó → target của mỗi nhân viên/tháng gắn đúng với version SCD2 phù hợp, không bị ép sai vào cấu trúc ngày hàng ngày không khớp với bản chất theo tháng của nó.
 
 #### SUBTASK — Preserve _run_date,_batch_id lineage cols on fact tables
 
@@ -2362,6 +2648,7 @@ As-of join SCD2: dùng `join_asof` của Polars hoặc filter điều kiện ran
 **File(s):** `src/transform_gold.py`
 **Technical Steps:** Đảm bảo `select()`/`join()` không vô tình drop 2 cột metadata này.
 **Acceptance Criteria:** `fact_sales.columns` chứa `_run_date`, `_batch_id`.
+**💡 Vì sao cần:** Không làm → thao tác `select()`/`join()` rất dễ vô tình chỉ giữ lại cột mình cần mà bỏ quên cột lineage — tới Gold không còn biết dòng dữ liệu này đến từ lần chạy pipeline nào. Có nó → dấu vết nguồn gốc đi theo dữ liệu tới tận Gold, vẫn truy vết được khi có sự cố dù đã qua 3 lớp Bronze→Silver→Gold.
 
 ---
 
@@ -2446,41 +2733,44 @@ Tính Promotion Uplift/ROI (đó là DAX measure ở Epic 4, không phải Gold 
 
 `dim_promotion` giữ nguyên `applicable_products`, `start_date`, `end_date` để Power BI join theo khoảng ngày ở P4.3.
 
-#### SUBTASK — dim_territory + dim_promotion build
+#### SUBTASK — dim_territory + dim_promotion build (+ Unknown Member)  _[SỬA]_
 
 **Labels:** db, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Build 2 Dim còn lại.
-**Input Spec:** `data/silver/<run_date>/{territory_mapping,promotion_program}.parquet`.
-**Output/Deliverable:** `dim_territory`, `dim_promotion` với surrogate key.
+**Goal:** Build 2 Dim còn lại, đủ dòng Unknown Member (key=-1) theo quyết định chung ở P3.1.
+**Input Spec:** `data/silver/<run_date>/{territory_mapping,promotion_program}.parquet`, helper `add_unknown_member()` (P3.1).
+**Output/Deliverable:** `dim_territory`, `dim_promotion` với surrogate key + dòng Unknown Member.
 **Tech Stack:** Polars.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** Select cột, sinh surrogate key cho từng bảng.
-**Acceptance Criteria:** 2 Dim có key duy nhất, giữ nguyên `start_date`/`end_date`/`applicable_products` cho `dim_promotion`.
+**Technical Steps:** Select cột, sinh surrogate key cho từng bảng (bắt đầu từ `1`), gọi `add_unknown_member()` thêm dòng `key=-1`.
+**Acceptance Criteria:** 2 Dim có key duy nhất, giữ nguyên `start_date`/`end_date`/`applicable_products` cho `dim_promotion`; mỗi Dim có đúng 1 dòng key=-1.
+**💡 Vì sao cần:** Không làm → không có bảng riêng cho khu vực/chương trình khuyến mãi, phân tích hiệu quả khuyến mãi và khu vực phải join thẳng Silver, phức tạp và dễ sai. Có nó → có bảng chiều sẵn sàng cho khu vực và khuyến mãi, join vào Fact đơn giản, đồng bộ cách xử lý "không match" như các Dim khác.
 
-#### SUBTASK — fact_returns join dims
-
-**Labels:** db, phase-3, sprint-3 | **Priority:** Medium
-
-**Goal:** Build `fact_returns` với FK.
-**Input Spec:** `data/silver/<run_date>/return_transactions.parquet` + `dim_customers`, `dim_products`, `dim_employees`.
-**Output/Deliverable:** `fact_returns` với FK hợp lệ.
-**Tech Stack:** Polars join.
-**File(s):** `src/transform_gold.py`
-**Technical Steps:** Join theo `customer_id`/`product_id`/`employee_id`, giữ `_run_date`/`_batch_id`.
-**Acceptance Criteria:** Số dòng `fact_returns` khớp `return_transactions` gốc.
-
-#### SUBTASK — fact_distributor_orders join dim_distributors/dim_products
+#### SUBTASK — fact_returns join dims (left join + fill_null(-1))  _[SỬA]_
 
 **Labels:** db, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Build `fact_distributor_orders` với FK.
-**Input Spec:** `data/silver/<run_date>/distributor_orders.parquet` + `dim_distributors`, `dim_products`.
-**Output/Deliverable:** `fact_distributor_orders` giữ `fill_rate_pct`, `ontime_delivery`, FK hợp lệ.
-**Tech Stack:** Polars join.
+**Goal:** Build `fact_returns` với FK, không FK nào để NULL.
+**Input Spec:** `data/silver/<run_date>/return_transactions.parquet` + `dim_customers`, `dim_products`, `dim_employees` (đã có Unknown Member).
+**Output/Deliverable:** `fact_returns` với FK hợp lệ, FK không match = `-1`.
+**Tech Stack:** Polars `join(how="left")`, `.fill_null(-1)`.
 **File(s):** `src/transform_gold.py`
-**Technical Steps:** Join theo `distributor_id`/`product_id`, giữ nguyên cột đo lường fill-rate/on-time.
-**Acceptance Criteria:** `fact_distributor_orders` có đủ FK + cột đo lường, số dòng khớp gốc.
+**Technical Steps:** Left join theo `customer_id`/`product_id`/`employee_id`, `.fill_null(-1)` trên cột FK ngay sau join, giữ `_run_date`/`_batch_id`.
+**Acceptance Criteria:** Số dòng `fact_returns` khớp `return_transactions` gốc; không có FK NULL, chỉ `-1` hoặc key thật.
+**💡 Vì sao cần:** Không làm → không phân tích được tình trạng trả hàng theo khách hàng/sản phẩm/nhân viên nào, mất khả năng đánh giá chất lượng sản phẩm hay dịch vụ. Có nó → biết chính xác ai trả hàng gì, của nhân viên nào bán, phục vụ phân tích chất lượng/dịch vụ.
+
+#### SUBTASK — fact_distributor_orders join dim_distributors/dim_products (left join + fill_null(-1))  _[SỬA]_
+
+**Labels:** db, phase-3, sprint-3 | **Priority:** Medium
+
+**Goal:** Build `fact_distributor_orders` với FK, không FK nào để NULL.
+**Input Spec:** `data/silver/<run_date>/distributor_orders.parquet` + `dim_distributors`, `dim_products` (đã có Unknown Member).
+**Output/Deliverable:** `fact_distributor_orders` giữ `fill_rate_pct`, `ontime_delivery`, FK hợp lệ, FK không match = `-1`.
+**Tech Stack:** Polars `join(how="left")`, `.fill_null(-1)`.
+**File(s):** `src/transform_gold.py`
+**Technical Steps:** Left join theo `distributor_id`/`product_id`, `.fill_null(-1)` trên cột FK ngay sau join, giữ nguyên cột đo lường fill-rate/on-time.
+**Acceptance Criteria:** `fact_distributor_orders` có đủ FK + cột đo lường, số dòng khớp gốc; không có FK NULL.
+**💡 Vì sao cần:** Không làm → không đánh giá được nhà phân phối nào giao hàng đúng hạn/đủ số lượng, mất công cụ để quản lý hiệu suất NPP. Có nó → có bảng đo lường hiệu suất giao hàng theo từng NPP/sản phẩm, phục vụ trang Dashboard Promotion & Distributor Performance ở Epic 4.
 
 ---
 
@@ -2576,6 +2866,7 @@ Dashboard trực quan hóa (Epic 4, P4.2)
 **File(s):** `src/transform_gold.py`
 **Technical Steps:** `fact_sales.group_by(["region","month"]).agg(pl.col("net_amount").sum().alias("actual_revenue"))` join với target đã agg tương tự.
 **Acceptance Criteria:** Tổng khớp tính tay trên dữ liệu mẫu nhỏ.
+**💡 Vì sao cần:** Không làm → đây chính là báo cáo giám đốc yêu cầu ("Doanh số thực tế so với Target theo vùng") — không có subtask này thì mục tiêu chính của cả Phase 3 không đạt được. Có nó → có sẵn 1 bảng tổng hợp gọn, Marketer xem ngay vùng nào đạt/không đạt chỉ tiêu mà không cần tính tay.
 
 #### SUBTASK — Compute variance_pct column
 
@@ -2588,6 +2879,7 @@ Dashboard trực quan hóa (Epic 4, P4.2)
 **File(s):** `src/transform_gold.py`
 **Technical Steps:** `(actual_revenue - target_revenue) / target_revenue`, guard chia 0 khi `target_revenue` = 0 hoặc NULL (trả NULL thay vì lỗi).
 **Acceptance Criteria:** Không có dòng nào crash/Inf khi `target_revenue=0`.
+**💡 Vì sao cần:** Không làm → vùng nào chưa được set target (`target_revenue=0`) làm phép chia lỗi (`chia cho 0`), cả pipeline hoặc cả dashboard crash chỉ vì 1 vùng thiếu dữ liệu target. Có nó → % chênh lệch tính đúng cho vùng có target, còn vùng chưa có target hiển thị rõ ràng (NULL/N-A) thay vì làm sập cả báo cáo.
 
 #### SUBTASK — write_parquet mart_sales_vs_target to data/gold/<run_date>/
 
@@ -2600,6 +2892,7 @@ Dashboard trực quan hóa (Epic 4, P4.2)
 **File(s):** `src/transform_gold.py`
 **Technical Steps:** `os.makedirs(f"data/gold/{run_date}", exist_ok=True)` → `write_parquet()` cho từng bảng.
 **Acceptance Criteria:** `data/gold/<run_date>/` chứa đủ dim_customers, dim_products, dim_distributors, dim_date, dim_territory, dim_promotion, dim_employees, fact_sales, fact_targets, fact_returns, fact_distributor_orders, mart_sales_vs_target.
+**💡 Vì sao cần:** Không làm → toàn bộ Dim/Fact/Mart chỉ nằm trong bộ nhớ tạm, tắt chương trình mất hết, Power BI (Epic 4) không có gì để kết nối vào. Có nó → có đủ 12 bảng dưới dạng file, Power BI kết nối thẳng vào đọc, không cần chạy lại pipeline mỗi lần mở dashboard.
 
 ---
 
@@ -2695,6 +2988,7 @@ Viết test (P3.7), CLI (P3.8)
 **File(s):** `src/transform_silver.py`, `src/transform_gold.py`
 **Technical Steps:** Thay từng `pl.read_parquet(path)` → `pl.scan_parquet(path)`; thêm `.collect()` ngay trước mỗi `write_parquet()` call.
 **Acceptance Criteria:** Chạy lại `--layer silver` và `--layer gold`, output số liệu giống hệt bản trước refactor.
+**💡 Vì sao cần:** Không làm → `pl.read_parquet()` (Eager) đọc toàn bộ file vào RAM ngay lập tức dù chỉ cần vài cột/vài dòng, tốn bộ nhớ và chậm hơn khi data lớn dần. Có nó → Polars biết trước toàn bộ các bước cần làm (Lazy), tự tối ưu chỉ đọc/xử lý đúng phần cần thiết, tiết kiệm bộ nhớ và nhanh hơn — quan trọng khi dữ liệu tăng theo thời gian.
 
 ---
 
@@ -2750,6 +3044,7 @@ Viết test (P3.7), CLI (P3.8)
 
 * \[ \] **Scenario 1 (Happy path):** Given fixture DataFrame nhỏ mô phỏng đúng số liệu, When chạy `test_mart_sales_vs_target()`, Then assert `actual_revenue`/`target_revenue`/`variance_pct` đúng giá trị kỳ vọng tính tay
 * \[ \] **Scenario 2 (Error/Exception):** Given fixture nhân viên đổi vùng giữa chừng (2 version), When chạy `test_scd2_valid_to()`, Then assert `valid_to` của version cũ = `effective_date` của version mới, không phải NULL
+* \[ \] **Scenario 3 (Error/Exception):** Given fixture nhân viên có `resign_date`, When chạy `test_scd2_valid_to()`, Then assert `valid_to` của version cuối = `resign_date` (không phải NULL) — đây là case hay bị bỏ sót, phải test riêng
 
 ---
 
@@ -2790,18 +3085,20 @@ Sau khi có test thật, quay lại S0.3 (CI Pipeline Skeleton) cập nhật wor
 **File(s):** `tests/test_pipeline.py`
 **Technical Steps:** Tạo fixture, gọi hàm build mart (P3.5), assert `actual_revenue`/`target_revenue`/`variance_pct` đúng giá trị tính tay.
 **Acceptance Criteria:** `uv run pytest -k test_mart_sales_vs_target` pass.
+**💡 Vì sao cần:** Không làm → công thức tính doanh số/target chỉ được kiểm bằng mắt 1 lần lúc code, ai sửa code sau này (kể cả sửa nhầm 1 dấu trừ thành cộng) không ai phát hiện, báo cáo giám đốc xem sẽ sai mà không biết. Có nó → có phép thử tự động với số liệu biết trước đáp án, sai là biết ngay.
 
-#### SUBTASK — test_scd2_valid_to() kiểm tra valid_to cập nhật đúng khi nhân viên đổi vùng
+#### SUBTASK — test_scd2_valid_to() kiểm tra valid_to đúng khi đổi vùng VÀ khi nghỉ việc  _[SỬA]_
 
 **Labels:** backend, phase-3, sprint-3 | **Priority:** Medium
 
-**Goal:** Test tự động logic SCD Type 2.
-**Input Spec:** Fixture DataFrame nhỏ mô phỏng `employee_master` (1 nhân viên, 2 version).
+**Goal:** Test tự động logic SCD Type 2, bắt buộc phủ cả case nghỉ việc (P3.2 Scenario 2/3) chứ không chỉ case đổi vùng.
+**Input Spec:** Fixture DataFrame nhỏ mô phỏng `employee_master`: (1) 1 nhân viên 2 version đổi vùng, (2) 1 nhân viên có `resign_date`.
 **Output/Deliverable:** Hàm `test_scd2_valid_to()` trong `test_pipeline.py`.
 **Tech Stack:** pytest, Polars.
 **File(s):** `tests/test_pipeline.py`
-**Technical Steps:** Tạo fixture, gọi hàm SCD2 (P3.2), assert `valid_to` version cũ = `effective_date` version mới, `is_current` đúng.
-**Acceptance Criteria:** `uv run pytest -k test_scd2_valid_to` pass.
+**Technical Steps:** Tạo fixture gồm cả 2 case, gọi hàm SCD2 (P3.2), assert `valid_to` version cũ = `effective_date` version mới; assert `valid_to` version cuối của nhân viên nghỉ việc = `resign_date` (KHÔNG phải NULL); assert `is_current` đúng cho cả 2 case.
+**Acceptance Criteria:** `uv run pytest -k test_scd2_valid_to` pass, bao gồm assertion riêng cho case nghỉ việc.
+**💡 Vì sao cần:** Không làm → logic SCD2 (đổi vùng, nghỉ việc) rất dễ bị ai đó vô tình sửa hỏng khi refactor code sau này, và bug loại này (như case nghỉ việc bị bỏ NULL) đã từng xảy ra ngay trong chính bản backlog gốc — nếu không test thì lỗi tương tự dễ tái diễn không ai biết. Có nó → mỗi lần sửa code, chạy test là biết ngay còn đúng hay không.
 
 #### SUBTASK — Wire pytest vào CI pipeline skeleton (cập nhật S0.3)
 
@@ -2814,6 +3111,7 @@ Sau khi có test thật, quay lại S0.3 (CI Pipeline Skeleton) cập nhật wor
 **File(s):** `.github/workflows/ci.yml`
 **Technical Steps:** Sửa step `pytest --collect-only` → `pytest` (chạy test thật).
 **Acceptance Criteria:** CI job pass với 2 test thật, không còn chỉ collect-only.
+**💡 Vì sao cần:** Không làm → có test thật nhưng chỉ chạy tay trên máy mình, quên chạy 1 lần là commit code lỗi lên mà không ai biết cho tới khi merge. Có nó → mỗi lần push, CI tự chạy test thật, chặn merge nếu test fail — không phụ thuộc vào việc "có nhớ chạy test tay hay không".
 
 ---
 
@@ -2909,6 +3207,7 @@ Scheduler tự động chạy hàng ngày (Airflow) — ghi chú kiến trúc m�
 **File(s):** `main.py`
 **Technical Steps:** `parser.add_argument("--layer", choices=[...], required=True)`, `parser.add_argument("--run-date", required=True)`.
 **Acceptance Criteria:** `uv run main.py --help` hiển thị đủ 2 tham số với mô tả rõ.
+**💡 Vì sao cần:** Không làm → không có cách nào nói cho chương trình biết "chạy layer nào, ngày nào" — phải sửa code tay mỗi lần muốn đổi. Có nó → chạy bằng tham số dòng lệnh, đổi ngày/layer không cần sửa code, gõ sai tham số cũng được báo lỗi rõ ràng.
 
 #### SUBTASK — Wire --layer=bronze/silver/gold gọi đúng module tương ứng
 
@@ -2921,6 +3220,7 @@ Scheduler tự động chạy hàng ngày (Airflow) — ghi chú kiến trúc m�
 **File(s):** `main.py`
 **Technical Steps:** `if args.layer == "bronze": extract.run(...)` tương tự cho silver/gold.
 **Acceptance Criteria:** `--layer bronze` chỉ chạy Bronze, không chạy Silver/Gold.
+**💡 Vì sao cần:** Không làm → mỗi lần chỉ muốn chạy lại 1 layer (VD Silver bị lỗi, muốn chạy lại riêng Silver) lại phải chạy hết cả pipeline từ đầu, tốn thời gian và có thể tải lại Google Drive không cần thiết. Có nó → chọn đúng layer cần chạy, tiết kiệm thời gian khi debug hoặc chạy lại từng phần.
 
 #### SUBTASK — Wire --layer=all chạy tuần tự Bronze→Silver→Gold trong 1 lệnh
 
@@ -2933,14 +3233,15 @@ Scheduler tự động chạy hàng ngày (Airflow) — ghi chú kiến trúc m�
 **File(s):** `main.py`
 **Technical Steps:** `if args.layer == "all": extract.run(...); transform_silver.run(...); transform_gold.run(...)`.
 **Acceptance Criteria:** `uv run main.py --layer all --run-date <date>` chạy đủ Bronze→Silver→Gold không lỗi, khớp AC Epic 3.
+**💡 Vì sao cần:** Không làm → phải gõ 3 lệnh riêng (bronze, silver, gold) mỗi lần muốn chạy full pipeline, dễ quên 1 bước hoặc chạy sai thứ tự. Có nó → 1 lệnh duy nhất chạy hết từ Google Drive tới Gold, đúng thứ tự, không cần nhớ 3 lệnh rời.
 
 ---
 
-# EPIC 4 — Phase 3: Power BI Dashboard & Reporting Layer  _[giữ nguyên]_
+# EPIC 4 — Phase 4: Power BI Dashboard & Reporting Layer  _[giữ nguyên]_
 
-## EPIC — Phase 3: Power BI Dashboard & Reporting Layer
+## EPIC — Phase 4: Power BI Dashboard & Reporting Layer
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 # 🚀 EPIC: Power BI Dashboard & Reporting Layer
 
@@ -2961,7 +3262,7 @@ Scheduler tự động chạy hàng ngày (Airflow) — ghi chú kiến trúc m�
 
 * **Blocked By:** Epic 3 (Gold Star Schema)
 * **Blocks:** None
-* **Target Phase / Sprint:** Phase 3 / Sprint 3
+* **Target Phase / Sprint:** Phase 4 / Sprint 3
 * **Start Date / Due Date:** 2026-08-24 / 2026-08-25
 * **Product Owner (sign-off):** Linh Nguyen
 * **Required Reviewer(s):** Linh Nguyen (self-review, solo capstone)
@@ -2985,13 +3286,13 @@ N/A (Production Impact: Không)
 ### 📝 Assumptions Made
 
 * \[2026-07-26\] Checklist nghiệm thu BRD chỉ yêu cầu tối thiểu 2/4 trang dashboard, ưu tiên trang phục vụ đúng actor Marketer/DA nêu trong đề bài (Sales vs Target, Promotion & Distributor Performance) → 2 trang này là bắt buộc (Priority High), Executive Overview + Data Ops Monitoring là stretch (Priority Medium) — Người duyệt: PO
-* \[2026-07-26\] Sprint 3/Epic 4 dùng chung due date phase-3 (xem mục 📝 Assumptions Made ở Epic 3 phía trên về placeholder "Bế giảng") — Người duyệt: PO
+* \[2026-07-26\] Sprint 3/Epic 4 dùng chung due date với Epic 3 (phase-3, Gold) do 2 Epic cùng nằm Sprint 3 (xem mục 📝 Assumptions Made ở Epic 3 phía trên về placeholder "Bế giảng") — Người duyệt: PO
 
 ---
 
 ### STORY — P4.1 Power BI Data Source Connection Setup
 
-**Labels:** dashboard, infra, phase-3, sprint-3 | **Priority:** High
+**Labels:** dashboard, infra, phase-4, sprint-3 | **Priority:** High
 
 # 📋 USER STORY: Power BI Data Source Connection Setup
 
@@ -3031,7 +3332,7 @@ N/A (Production Impact: Không)
 
 ### 🏷️ Metadata
 
-* **Labels:** sprint-3, phase-3, dashboard, infra
+* **Labels:** sprint-3, phase-4, dashboard, infra
 * **Priority:** High
 * **Story Points:** 3
 
@@ -3041,12 +3342,13 @@ N/A (Production Impact: Không)
 
 * \[ \] **Scenario 1 (Happy path):** Given `data/gold/<run_date>/` có đủ 12 file parquet, When Power BI Get Data từ folder, Then toàn bộ bảng load vào Data Model không lỗi
 * \[ \] **Scenario 2 (Error/Exception):** Given đổi `run_date` param sang ngày khác chưa có Gold data, When refresh, Then Power BI báo lỗi rõ ràng "path not found" thay vì hiển thị dữ liệu cũ gây hiểu lầm
+* \[ \] **Scenario 3 (Security):** Given Gold Parquet đã drop cột PII từ kiến trúc (P3.1, không phải rà soát tay), When Power BI load `dim_customers`/`dim_employees`/`dim_distributors`, Then Fields pane không có `phone/address/tax_code/date_of_birth` sẵn — không cần thao tác ẩn field nào thêm
 
 ---
 
 ### 🔒 Non-Functional Requirements
 
-N/A (Production Impact: Không)
+**Security:** PII (`phone, address, tax_code, date_of_birth`) đã bị drop từ lúc build Gold Dim tables (P3.1) — kiểm soát bằng kiến trúc, không phải quy trình rà soát tay trước khi share `.pbix`. File `.pbix` chỉ kết nối vào Gold Parquet vốn đã sạch PII, nên kể cả ai đọc thẳng file Parquet trên đĩa (không qua Power BI) cũng không thấy PII. Subtask cuối trong story này chỉ còn xác nhận (defense-in-depth), không phải điểm kiểm soát chính. (Production Impact vẫn "Không" — rủi ro rò rỉ dữ liệu khi chia sẻ ngoài, không phải rủi ro production traffic.)
 
 ---
 
@@ -3072,7 +3374,7 @@ Power BI Parquet connector (Get Data > Parquet) hoặc DuckDB connector nếu Pa
 
 #### SUBTASK — Connect Power BI to data/gold/<run_date>/ folder, load dim/fact tables
 
-**Labels:** dashboard, infra, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, infra, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Kết nối Power BI Desktop vào toàn bộ bảng Gold.
 **Input Spec:** `data/gold/<run_date>/*.parquet` (12 file: 7 dim + 4 fact + 1 mart).
@@ -3081,10 +3383,11 @@ Power BI Parquet connector (Get Data > Parquet) hoặc DuckDB connector nếu Pa
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Get Data → Folder → trỏ `data/gold/<run_date>/` → Combine & Load từng file parquet thành bảng riêng.
 **Acceptance Criteria:** Power BI Fields pane hiện đủ 12 bảng đúng tên.
+**💡 Vì sao cần:** Không làm → dữ liệu Gold nằm sẵn ở dạng file nhưng Power BI không tự biết để đọc — không có bước này thì không có gì để làm dashboard cả. Có nó → toàn bộ 12 bảng có mặt trong Power BI, sẵn sàng để dựng báo cáo.
 
 #### SUBTASK — Build relationships in model matching star schema
 
-**Labels:** dashboard, infra, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, infra, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Khai báo quan hệ Dim-Fact đúng theo Star Schema.
 **Input Spec:** 12 bảng đã load (subtask trước), surrogate key từ mỗi Dim.
@@ -3093,10 +3396,11 @@ Power BI Parquet connector (Get Data > Parquet) hoặc DuckDB connector nếu Pa
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Kéo-thả tạo relationship theo key (`customer_key`, `product_key`, `employee_key`, `date_key`, `distributor_key`, `territory_key`, `promotion_key`) từ Dim sang Fact tương ứng.
 **Acceptance Criteria:** Model view không có cảnh báo "no relationship"; measure test trên 1 visual cross-filter đúng giữa Dim và Fact.
+**💡 Vì sao cần:** Không làm → 12 bảng nằm rời rạc trong Power BI, không "biết" bảng nào liên quan bảng nào — chọn lọc theo vùng ở 1 visual không tự động lọc theo visual khác. Có nó → chọn 1 khách hàng/vùng trên 1 biểu đồ, mọi biểu đồ liên quan tự động cập nhật theo (đúng bản chất Star Schema).
 
 #### SUBTASK — Parameterize run_date so dashboard refreshes to latest gold folder
 
-**Labels:** dashboard, infra, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, infra, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Cho phép đổi ngày dữ liệu mà không sửa query thủ công.
 **Input Spec:** Đường dẫn `data/gold/<run_date>/` hiện đang hardcode trong query (subtask 1).
@@ -3105,12 +3409,28 @@ Power BI Parquet connector (Get Data > Parquet) hoặc DuckDB connector nếu Pa
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Tạo Parameter `RunDate` (Text) → sửa M query nối path bằng `"data/gold/" & RunDate & "/"`.
 **Acceptance Criteria:** Đổi giá trị Parameter `RunDate` → Refresh → dashboard load đúng data ngày mới.
+**💡 Vì sao cần:** Không làm → mỗi lần có dữ liệu ngày mới, phải mở Power Query sửa tay đường dẫn thư mục, dễ gõ sai/quên sửa. Có nó → chỉ cần đổi 1 tham số rồi bấm Refresh, không phải sửa code/query mỗi lần đổi ngày.
+
+#### SUBTASK — Xác nhận PII đã bị drop ở Gold (lớp phòng vệ thứ 2, không phải kiểm soát chính)  _[SỬA — kiểm soát chính đã dời sang Gold P3.1]_
+
+**Labels:** dashboard, infra, pii, compliance-nd13, phase-4, sprint-3 | **Priority:** Medium
+
+**Goal:** Kiểm soát PII CHÍNH giờ nằm ở kiến trúc (P3.1 drop cột PII trước khi ghi Gold Parquet) — không đợi tới lúc share `.pbix` mới rà soát bằng tay, vì Gold Parquet có thể bị đọc trực tiếp bất kỳ lúc nào không qua Power BI. Subtask này chỉ còn là bước xác nhận cuối (defense-in-depth): đảm bảo Power BI model không vô tình tự thêm lại PII qua 1 nguồn dữ liệu khác, và Fields pane sạch trước khi nộp bài/đưa vào portfolio.
+**Input Spec:** `dim_customers`, `dim_employees`, `dim_distributors` đã load vào Power BI (subtask 1) — đáng lẽ đã KHÔNG còn cột PII vì Gold Parquet đã drop từ P3.1.
+**Output/Deliverable:** Xác nhận Fields pane không có cột PII nào; nếu vẫn thấy PII xuất hiện (nghĩa là P3.1 có bug hoặc ai đó nối thêm nguồn dữ liệu khác vào model), dừng lại và fix ở Gold trước, không tự ý ẩn field ở tầng Power BI để che tạm.
+**Tech Stack:** Power BI Model view (Fields pane review).
+**File(s):** `VDAP_Dashboard.pbix`
+**Technical Steps:**
+1. Duyệt Fields pane của `dim_customers`/`dim_employees`/`dim_distributors`, đối chiếu KHÔNG còn `phone/address/tax_code/date_of_birth`
+2. Nếu vẫn thấy PII: quay lại P3.1 kiểm tra `PII_COLUMNS_TO_DROP` có đủ chưa, hoặc kiểm tra model có nối thêm query/nguồn nào khác ngoài `data/gold/<run_date>/`
+**Acceptance Criteria:** Fields pane của cả 3 Dim không có cột PII nào — vì Gold Parquet gốc đã không có, không phải vì bị ẩn thủ công ở Power BI.
+**💡 Vì sao cần:** Không làm → không có bước xác nhận cuối, lỡ bước drop PII ở Gold (P3.1) có bug thì không ai phát hiện cho tới khi file `.pbix` đã lỡ share ra ngoài. Có nó → kiểm tra chéo lần cuối trước khi coi dashboard là hoàn thiện, bắt được bug sớm nếu kiểm soát chính ở Gold bị lọt.
 
 ---
 
 ### STORY — P4.2 Dashboard Page: Sales vs Target (US-04)
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** High
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** High
 
 # 📋 USER STORY: Dashboard Page — Sales vs Target
 
@@ -3150,7 +3470,7 @@ Power BI Parquet connector (Get Data > Parquet) hoặc DuckDB connector nếu Pa
 
 ### 🏷️ Metadata
 
-* **Labels:** sprint-3, phase-3, dashboard
+* **Labels:** sprint-3, phase-4, dashboard
 * **Priority:** High
 * **Story Points:** 3
 
@@ -3191,7 +3511,7 @@ DAX: `Achievement Rate = DIVIDE([Actual Revenue],[Target Revenue])`; `Variance =
 
 #### SUBTASK — Matrix/bar visual: actual vs target revenue by region+month
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Visual chính của trang Sales vs Target.
 **Input Spec:** `mart_sales_vs_target` đã load (P4.1).
@@ -3200,10 +3520,11 @@ DAX: `Achievement Rate = DIVIDE([Actual Revenue],[Target Revenue])`; `Variance =
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Thêm visual Matrix, kéo `region` vào Rows, `month` vào Columns, `actual_revenue`+`target_revenue` vào Values.
 **Acceptance Criteria:** Visual hiển thị đúng số khớp `mart_sales_vs_target` parquet.
+**💡 Vì sao cần:** Không làm → có dữ liệu sạch sẵn trong `mart_sales_vs_target` nhưng không ai nhìn thấy được nếu không có biểu đồ. Có nó → Marketer nhìn 1 phát là thấy ngay vùng nào/tháng nào đạt hay không đạt doanh số, đúng yêu cầu chính của US-04.
 
 #### SUBTASK — Achievement rate + Variance DAX measures
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Tạo 2 measure chính cho trang.
 **Input Spec:** `mart_sales_vs_target[actual_revenue]`, `[target_revenue]`.
@@ -3212,10 +3533,11 @@ DAX: `Achievement Rate = DIVIDE([Actual Revenue],[Target Revenue])`; `Variance =
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** `Achievement Rate = DIVIDE(SUM(mart_sales_vs_target[actual_revenue]), SUM(mart_sales_vs_target[target_revenue]))`; `Variance = SUM([actual_revenue]) - SUM([target_revenue])`.
 **Acceptance Criteria:** Measure không lỗi `#DIV/0!` khi target=0 (dùng DIVIDE có guard).
+**💡 Vì sao cần:** Không làm → chỉ có 2 con số thô (thực tế, target) mà không có % đạt chỉ tiêu, người xem phải tự tính nhẩm mỗi lần muốn biết "đạt bao nhiêu %". Có nó → có sẵn số % đạt chỉ tiêu và số chênh lệch, không lỗi khi 1 vùng chưa set target.
 
 #### SUBTASK — Region/month slicers
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Cho phép Marketer lọc theo vùng/tháng.
 **Input Spec:** Visual matrix đã có (subtask 1).
@@ -3224,12 +3546,13 @@ DAX: `Achievement Rate = DIVIDE([Actual Revenue],[Target Revenue])`; `Variance =
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Thêm Slicer visual cho `region`, 1 cho `month`, đặt trên đầu trang.
 **Acceptance Criteria:** Chọn 1 vùng trên Slicer → Matrix/measure cập nhật đúng theo filter.
+**💡 Vì sao cần:** Không làm → Marketer muốn xem riêng 1 vùng/1 tháng cụ thể phải nhìn cả bảng to rồi tự dò, mất công. Có nó → click chọn vùng/tháng muốn xem, toàn bộ trang tự lọc theo, xem đúng cái cần ngay.
 
 ---
 
 ### STORY — P4.3 Dashboard Page: Promotion & Distributor Performance (US-05)
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** High
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** High
 
 # 📋 USER STORY: Dashboard Page — Promotion & Distributor Performance
 
@@ -3269,7 +3592,7 @@ DAX: `Achievement Rate = DIVIDE([Actual Revenue],[Target Revenue])`; `Variance =
 
 ### 🏷️ Metadata
 
-* **Labels:** sprint-3, phase-3, dashboard
+* **Labels:** sprint-3, phase-4, dashboard
 * **Priority:** High
 * **Story Points:** 3
 
@@ -3310,7 +3633,7 @@ DAX: `Fill Rate = AVERAGE(fact_distributor_orders[fill_rate_pct])`; `On-time Del
 
 #### SUBTASK — Promotion Uplift/ROI DAX measures + visual
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Đo hiệu quả khuyến mãi.
 **Input Spec:** `fact_sales`, `dim_promotion` (đã load, P4.1).
@@ -3319,10 +3642,11 @@ DAX: `Fill Rate = AVERAGE(fact_distributor_orders[fill_rate_pct])`; `On-time Del
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** `Promotion Uplift = CALCULATE([Actual Revenue], DATESBETWEEN(...)) - CALCULATE([Actual Revenue], trước kỳ)`; `Promotion ROI = DIVIDE([Promotion Uplift] - SUM(dim_promotion[actual_cost_vnd]), SUM(dim_promotion[actual_cost_vnd]))`.
 **Acceptance Criteria:** Visual hiển thị Uplift/ROI theo từng chương trình khuyến mãi, số khớp tính tay trên 1 chương trình mẫu.
+**💡 Vì sao cần:** Không làm → Marketer không biết chương trình khuyến mãi nào thực sự làm tăng doanh số, có thể tiếp tục chi tiền cho chương trình không hiệu quả. Có nó → thấy rõ chương trình nào đáng tiếp tục, chương trình nào nên dừng, dựa trên số liệu chứ không phải cảm tính.
 
 #### SUBTASK — Fill Rate + On-time Delivery % visuals
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Đo hiệu suất giao hàng NPP.
 **Input Spec:** `fact_distributor_orders` (đã load, P4.1).
@@ -3331,10 +3655,11 @@ DAX: `Fill Rate = AVERAGE(fact_distributor_orders[fill_rate_pct])`; `On-time Del
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** `Fill Rate = AVERAGE(fact_distributor_orders[fill_rate_pct])`; `On-time Delivery % = DIVIDE(CALCULATE(COUNTROWS(fact_distributor_orders), fact_distributor_orders[ontime_delivery]=TRUE), COUNTROWS(fact_distributor_orders))`.
 **Acceptance Criteria:** Visual hiển thị đúng theo từng NPP, khớp tính tay trên dữ liệu mẫu.
+**💡 Vì sao cần:** Không làm → không đánh giá được nhà phân phối nào giao hàng đúng hạn/đủ số lượng, khó có căn cứ để làm việc/đàm phán với NPP kém hiệu quả. Có nó → thấy rõ NPP nào đang làm tốt, NPP nào cần cải thiện.
 
 #### SUBTASK — Channel/region filters
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Cho phép lọc theo kênh/vùng trên trang Promotion & Distributor.
 **Input Spec:** Visuals đã có (2 subtask trước).
@@ -3343,12 +3668,13 @@ DAX: `Fill Rate = AVERAGE(fact_distributor_orders[fill_rate_pct])`; `On-time Del
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Thêm Slicer `channel`, `region`, đặt đầu trang, verify sync filter đúng cả 2 visual (promotion + distributor).
 **Acceptance Criteria:** Chọn 1 kênh → cả 2 visual (Promotion Uplift, Fill Rate) cùng cập nhật.
+**💡 Vì sao cần:** Không làm → muốn xem riêng 1 kênh bán hàng/1 vùng phải nhìn hết cả trang rồi tự lọc bằng mắt. Có nó → chọn kênh/vùng, cả 2 visual (khuyến mãi + NPP) cùng lọc theo, xem đúng phạm vi cần trong 1 lần click.
 
 ---
 
 ### STORY — P4.4 Dashboard Page: Executive Overview [Stretch]
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 # 📋 USER STORY: Dashboard Page — Executive Overview
 
@@ -3388,7 +3714,7 @@ DAX: `Fill Rate = AVERAGE(fact_distributor_orders[fill_rate_pct])`; `On-time Del
 
 ### 🏷️ Metadata
 
-* **Labels:** sprint-3, phase-3, dashboard
+* **Labels:** sprint-3, phase-4, dashboard
 * **Priority:** Medium (stretch, ngoài MVP 2/4 trang bắt buộc)
 * **Story Points:** 2
 
@@ -3429,7 +3755,7 @@ DAX Growth MoM dùng `DATEADD` hoặc `PARALLELPERIOD` trên `dim_date`.
 
 #### SUBTASK — Total revenue + MoM/YoY growth measures
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** KPI tổng quan doanh thu.
 **Input Spec:** `fact_sales`, `dim_date` (đã load, P4.1).
@@ -3438,10 +3764,11 @@ DAX Growth MoM dùng `DATEADD` hoặc `PARALLELPERIOD` trên `dim_date`.
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** `Total Revenue = SUM(fact_sales[net_amount])`; `Growth MoM = DIVIDE([Total Revenue] - CALCULATE([Total Revenue], DATEADD(dim_date[date],-1,MONTH)), CALCULATE([Total Revenue], DATEADD(dim_date[date],-1,MONTH)))`.
 **Acceptance Criteria:** Card visual hiển thị Total Revenue + Growth % không lỗi.
+**💡 Vì sao cần:** Không làm → Ban giám đốc muốn biết "tháng này tăng/giảm bao nhiêu % so với tháng trước, năm trước" phải tự tính tay từ số liệu thô. Có nó → mở dashboard là thấy ngay tổng doanh thu và xu hướng tăng/giảm, không cần tính toán gì thêm.
 
 #### SUBTASK — Top 5 region/channel visual
 
-**Labels:** dashboard, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Visual xếp hạng vùng/kênh dẫn đầu doanh thu.
 **Input Spec:** `Total Revenue` measure (subtask trước).
@@ -3450,12 +3777,13 @@ DAX Growth MoM dùng `DATEADD` hoặc `PARALLELPERIOD` trên `dim_date`.
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Thêm Bar chart, filter Top N=5 theo `Total Revenue` trên `region`; tương tự cho `channel`.
 **Acceptance Criteria:** Chỉ hiển thị đúng 5 vùng/kênh cao nhất, sắp xếp giảm dần.
+**💡 Vì sao cần:** Không làm → nhìn bảng đầy đủ tất cả vùng/kênh khó nhận ra ngay đâu là nơi đóng góp doanh thu lớn nhất. Có nó → thấy ngay top 5 vùng/kênh dẫn đầu trong nháy mắt, phục vụ ra quyết định nhanh của Ban giám đốc.
 
 ---
 
 ### STORY — P4.5 Dashboard Page: Data Ops Monitoring [Stretch]
 
-**Labels:** dashboard, devops, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, devops, phase-4, sprint-3 | **Priority:** Medium
 
 # 📋 USER STORY: Dashboard Page — Data Ops Monitoring
 
@@ -3495,7 +3823,7 @@ DAX Growth MoM dùng `DATEADD` hoặc `PARALLELPERIOD` trên `dim_date`.
 
 ### 🏷️ Metadata
 
-* **Labels:** sprint-3, phase-3, dashboard, devops
+* **Labels:** sprint-3, phase-4, dashboard, devops
 * **Priority:** Medium (stretch, ngoài MVP 2/4 trang bắt buộc)
 * **Story Points:** 2
 
@@ -3536,7 +3864,7 @@ DAX: `Pipeline Success Rate = DIVIDE(COUNTROWS(FILTER(ingest_log,[status]="succe
 
 #### SUBTASK — Load ingest_log across run_dates
 
-**Labels:** dashboard, devops, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, devops, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Gộp `ingest_log.parquet` của nhiều ngày chạy để xem lịch sử.
 **Input Spec:** `data/bronze/*/ingest_log.parquet` (nhiều thư mục ngày).
@@ -3545,10 +3873,11 @@ DAX: `Pipeline Success Rate = DIVIDE(COUNTROWS(FILTER(ingest_log,[status]="succe
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** Get Data > Folder trỏ `data/bronze/` → filter file `ingest_log.parquet` → Combine & Load.
 **Acceptance Criteria:** Bảng gộp có dòng của tất cả các `run_date` đã chạy pipeline.
+**💡 Vì sao cần:** Không làm → mỗi `run_date` có 1 file `ingest_log.parquet` riêng, muốn xem lịch sử "hôm qua chạy có lỗi không" phải mở từng file rời rạc. Có nó → gộp lại thành 1 bảng lịch sử, xem toàn bộ các lần chạy trong 1 chỗ.
 
 #### SUBTASK — Pipeline Success Rate + batch status visual
 
-**Labels:** dashboard, devops, phase-3, sprint-3 | **Priority:** Medium
+**Labels:** dashboard, devops, phase-4, sprint-3 | **Priority:** Medium
 
 **Goal:** Visual chính trang Data Ops Monitoring.
 **Input Spec:** `ingest_log_history` (subtask trước).
@@ -3557,5 +3886,6 @@ DAX: `Pipeline Success Rate = DIVIDE(COUNTROWS(FILTER(ingest_log,[status]="succe
 **File(s):** `VDAP_Dashboard.pbix`
 **Technical Steps:** `Pipeline Success Rate = DIVIDE(CALCULATE(COUNTROWS(ingest_log_history), ingest_log_history[status]="success"), COUNTROWS(ingest_log_history))`; Table visual + conditional formatting đỏ cho dòng failed.
 **Acceptance Criteria:** Card hiển thị đúng % success; dòng failed nổi bật màu đỏ trong Table.
+**💡 Vì sao cần:** Không làm → Admin muốn biết pipeline có ổn định không phải tự mở terminal đọc log/ingest_log từng lần. Có nó → nhìn 1 trang là biết ngay tỷ lệ thành công, và batch nào lỗi tự nổi bật màu đỏ, không cần mở terminal.
 
 ---
