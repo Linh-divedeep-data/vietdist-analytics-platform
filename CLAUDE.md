@@ -62,16 +62,16 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 Khi bắt đầu 1 bd ticket mới (chưa có branch sẵn cho ticket đó):
 
 ```bash
-git checkout main
-git pull origin main
-git checkout -b feature/<ticket-id>-<slug>   # branch từ main mới nhất
+git checkout develop
+git pull origin develop
+git checkout -b feature/<ticket-id>-<slug>   # branch từ develop mới nhất
 bd update <ticket-id> --claim
 ```
 
 Rules:
-- Repo chỉ còn 1 branch nền tảng là `main` (đã xóa `develop` và toàn bộ nhánh cũ) — luôn branch từ `main` mới nhất, không branch từ nhánh feature khác đang dở.
+- `develop` là nhánh nền tảng để branch feature ra (tạo lại từ `main` ngày 2026-08-02 sau khi dọn sạch nhánh cũ) — luôn branch từ `develop` mới nhất, không branch từ `main` hay từ nhánh feature khác đang dở.
 - Nếu đang làm branch cũ dở (đã claim từ trước), KHÔNG cần pull/branch lại — chỉ áp dụng khi bắt đầu ticket mới.
-- Nếu có local change chưa commit khi checkout main, `git status` trước, stash nếu cần — không `checkout` đè mất việc đang làm.
+- Nếu có local change chưa commit khi checkout develop, `git status` trước, stash nếu cần — không `checkout` đè mất việc đang làm.
 - Đặt tên branch theo convention hiện có trong repo: `feature/<ID>-<slug>` (xem `git branch -a`).
 
 ### Naming convention bắt buộc (mọi lần tạo nhánh mới hoặc push)
