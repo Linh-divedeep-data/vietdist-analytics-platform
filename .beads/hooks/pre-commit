@@ -37,3 +37,14 @@ if command -v code-review-graph >/dev/null 2>&1; then
     code-review-graph update || true
     code-review-graph detect-changes --brief || true
 fi
+
+# Block direct commits on main — all work must land via PR from a feature
+# branch (see CLAUDE.md § Ticket Branch Workflow). Bypass only for a genuine
+# emergency: ALLOW_MAIN_COMMIT=1 git commit ...
+_branch="$(git symbolic-ref --short HEAD 2>/dev/null)"
+if [ "$_branch" = "main" ] && [ "${ALLOW_MAIN_COMMIT:-0}" != "1" ]; then
+    echo "BLOCKED: direct commit on 'main' is not allowed." >&2
+    echo "  Create a feature branch from develop and open a PR instead." >&2
+    echo "  Emergency bypass: ALLOW_MAIN_COMMIT=1 git commit ..." >&2
+    exit 1
+fi
