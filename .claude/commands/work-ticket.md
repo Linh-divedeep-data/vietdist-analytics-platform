@@ -9,10 +9,11 @@ Làm ticket **$ARGUMENTS**. Nếu không có ID, chạy `bd ready` hỏi tôi ch
 1. **Branch** — nếu ticket CHƯA có branch riêng (`git branch --list`, `git status`):
    ```
    git status
-   git checkout develop
-   git pull origin develop
+   git checkout main
+   git pull origin main
    git checkout -b feature/<ticket-id>-<slug>
    ```
+   Trước khi tạo/push, kiểm branch name khớp convention `<type>/<TICKET-ID>-<slug>` (xem CLAUDE.md § Ticket Branch Workflow / Naming convention) — không khớp thì hỏi lại tên đúng, không tự tạo.
    Đã ở branch của ticket này rồi (đang làm dở) → bỏ qua bước này.
    ĐIỀU KIỆN: nếu cần workspace cô lập riêng (vd chạy song song nhiều ticket) → gọi thêm skill `using-git-worktrees`.
 

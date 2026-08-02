@@ -62,17 +62,51 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 Khi bắt đầu 1 bd ticket mới (chưa có branch sẵn cho ticket đó):
 
 ```bash
-git checkout develop
-git pull origin develop
-git checkout -b feature/<ticket-id>-<slug>   # branch từ develop mới nhất
+git checkout main
+git pull origin main
+git checkout -b feature/<ticket-id>-<slug>   # branch từ main mới nhất
 bd update <ticket-id> --claim
 ```
 
 Rules:
-- Luôn branch từ `develop` mới nhất, không branch từ `main` hay từ branch feature khác đang dở.
+- Repo chỉ còn 1 branch nền tảng là `main` (đã xóa `develop` và toàn bộ nhánh cũ) — luôn branch từ `main` mới nhất, không branch từ nhánh feature khác đang dở.
 - Nếu đang làm branch cũ dở (đã claim từ trước), KHÔNG cần pull/branch lại — chỉ áp dụng khi bắt đầu ticket mới.
-- Nếu có local change chưa commit khi checkout develop, `git status` trước, stash nếu cần — không `checkout` đè mất việc đang làm.
+- Nếu có local change chưa commit khi checkout main, `git status` trước, stash nếu cần — không `checkout` đè mất việc đang làm.
 - Đặt tên branch theo convention hiện có trong repo: `feature/<ID>-<slug>` (xem `git branch -a`).
+
+### Naming convention bắt buộc (mọi lần tạo nhánh mới hoặc push)
+
+Trước khi `git checkout -b` hoặc `git push -u origin <branch>`, kiểm tra tên branch khớp pattern:
+
+```
+<type>/<TICKET-ID>-<slug>
+```
+
+- `type` ∈ `feature`, `chore`, `hotfix`, `bugfix` (theo prefix đã dùng trong repo — xem `git branch -a`)
+- `TICKET-ID` dạng `VDAP-<số>` (hoặc slug lowercase nếu chưa có ticket, ví dụ `vdap-0gd-...`)
+- `slug` lowercase, cách nhau bằng dấu `-`, không khoảng trắng/ký tự hoa
+
+Nếu tên branch không khớp pattern trên: KHÔNG tạo/push — báo lại cho user và hỏi tên đúng trước khi thực hiện.
+
+### PR description convention
+
+Title bắt buộc theo Conventional Commits + Jira key, khớp `type` dùng trong commit convention (`feat`/`fix`/`docs`/`chore`/`ci`/`refactor`/`test`):
+
+```
+<type>(VDAP-<key>): <tóm tắt ở dạng mệnh lệnh>
+```
+
+Body dùng 2 section chuẩn (theo mẫu `gh pr create` hiện có):
+
+```
+## Summary
+- ...
+
+## Test plan
+- [ ] ...
+```
+
+Nếu title/body không khớp format trên: sửa lại trước khi `gh pr create`, không tạo PR sai convention.
 
 ## Build & Test
 
