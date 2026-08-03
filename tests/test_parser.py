@@ -125,3 +125,29 @@ def test_read_csv_source_default_raw_dir_is_data_raw(monkeypatch):
 
     assert str(captured["path"]) == "data/raw/SRC01_sales.csv"
     assert captured["infer_schema_length"] == 0
+
+
+def test_read_excel_source_casts_all_columns_to_string(monkeypatch):
+    fake_df = pl.DataFrame({"id": [1, 2], "amount": [10.5, 20.0]})
+    monkeypatch.setattr(parser.pl, "read_excel", lambda path: fake_df)
+
+    df = parser.read_excel_source("SRC02_target.xlsx", raw_dir="data/raw")
+
+    assert df.height == 2
+    assert all(dtype == pl.String for dtype in df.dtypes)
+    assert df["id"].to_list() == ["1", "2"]
+
+
+def test_read_excel_source_missing_file_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        parser.read_excel_source("does_not_exist.xlsx", raw_dir=str(tmp_path))
+
+
+def test_read_excel_source_reraises_import_error_with_install_hint(monkeypatch):
+    def fake_read_excel(path):
+        raise ImportError("no Excel engine found")
+
+    monkeypatch.setattr(parser.pl, "read_excel", fake_read_excel)
+
+    with pytest.raises(ImportError, match="uv add fastexcel"):
+        parser.read_excel_source("SRC02_target.xlsx", raw_dir="data/raw")
