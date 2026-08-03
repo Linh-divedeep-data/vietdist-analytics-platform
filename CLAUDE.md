@@ -108,6 +108,17 @@ Body dùng 2 section chuẩn (theo mẫu `gh pr create` hiện có):
 
 Nếu title/body không khớp format trên: sửa lại trước khi `gh pr create`, không tạo PR sai convention.
 
+### Push + tạo PR xong → tự động bd close (không hỏi lại)
+
+Ngay sau khi `git push` branch của 1 ticket + `gh pr create` chạy thành công (PR đã có URL trả về) — trong CÙNG lượt đó, chạy luôn `bd close <id>` cho ticket tương ứng. Không hỏi lại, không chờ duyệt riêng cho bước này — khác với chính sách "chờ duyệt" mặc định ở Conservative profile (Session Completion) chỉ áp dụng cho commit/push/PR, KHÔNG áp dụng cho `bd close` khi đã push+PR xong.
+
+`bd close` sẽ tự tick Jira Done theo rule bên dưới (bd close → Jira Done).
+
+Rules:
+- Chỉ áp dụng khi push+PR thành công thật (có URL PR trả về, không lỗi). Push/PR lỗi thì KHÔNG bd close.
+- Vẫn phải verify AC/test pass trước khi push (theo `verification-before-completion`) — quy tắc này chỉ bỏ bước hỏi lại cho `bd close`, không bỏ bước verify.
+- Không mở rộng sang merge PR, force-push, hay bất kỳ thao tác git nào khác — những thao tác đó vẫn theo chính sách Conservative (chờ duyệt) trừ khi user nói rõ.
+
 ### bd close → Jira Done (tự động)
 
 Bất kỳ lúc nào `bd close <id>` chạy cho 1 ticket có gắn Jira (field `External: jira-VDAP-<key>`) — dù lý do là PR đã tạo, AC đã verify xong không cần PR, hay dọn lại ticket cũ — ngay trong cùng lượt đó, chuyển luôn Jira issue tương ứng sang **Done** qua `getTransitionsForJiraIssue` + `transitionJiraIssue` (cloudId `87de12a7-0360-4035-9a5b-afdee4c28880`). Không hỏi lại. Nếu ticket không có field `External` trỏ Jira thì bỏ qua bước này.
