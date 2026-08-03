@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint
+        run: uvx ruff check .
+        continue-on-error: true
+
+      - name: Test collection (placeholder — real tests land in Epic 3)
+        run: |
+          # GitHub Actions runs steps under `bash -e`, so a plain
+          # `cmd; code=$?` never reaches the capture line once pytest
+          # exits non-zero. `|| code=$?` keeps this step alive under -e.
+          uv run pytest --collect-only || code=$?
+          code=${code:-0}
+          # Exit 5 = "no tests collected", expected until Epic 3 adds real tests.
+          # Any other non-zero code is a real collection error (bad import/syntax) and must fail the job.
+          if [ "$code" -eq 5 ]; then
+            exit 0
+          fi
+          exit "$code"
