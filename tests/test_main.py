@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from main import main
+from main import _check_layer_results, main
 
 LOG_LINE_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} "
@@ -45,3 +45,33 @@ def test_different_runs_get_different_batch_ids(capsys):
     second_batch_id = LOG_LINE_RE.match(second_run_lines[0]).group("batch_id")
 
     assert first_batch_id != second_batch_id
+
+
+def test_check_layer_results_returns_1_and_logs_error_on_any_failure(capsys):
+    records = [
+        {"source": "src01", "status": "success"},
+        {"source": "src02", "status": "failed"},
+    ]
+
+    exit_code = _check_layer_results(records, layer_name="bronze", batch_id="batch-x")
+
+    assert exit_code == 1
+    output = capsys.readouterr().err
+    assert "FAILED: 1/2" in output
+    assert "layer=bronze" in output
+    assert "[ERROR]" in output
+    assert "ingest_log.parquet" in output
+
+
+def test_check_layer_results_returns_0_and_logs_ok_when_all_succeed(capsys):
+    records = [
+        {"source": "src01", "status": "success"},
+        {"source": "src02", "status": "success"},
+    ]
+
+    exit_code = _check_layer_results(records, layer_name="bronze", batch_id="batch-x")
+
+    assert exit_code == 0
+    output = capsys.readouterr().err
+    assert "OK" in output
+    assert "layer=bronze" in output
