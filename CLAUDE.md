@@ -96,15 +96,27 @@ Title bắt buộc theo Conventional Commits + Jira key, khớp `type` dùng tro
 <type>(VDAP-<key>): <tóm tắt ở dạng mệnh lệnh>
 ```
 
-Body dùng 2 section chuẩn (theo mẫu `gh pr create` hiện có):
+Body dùng template chuẩn sau (theo mẫu `gh pr create` hiện có) — mỗi PR phải trả lời được: tại sao làm, làm gì, làm như thế nào, và cách kiểm tra:
 
 ```
-## Summary
-- ...
+## Overview
+- Lý do có thay đổi này, link ticket (Jira `VDAP-<key>` / bd issue id)
+
+## Solution
+- Mô tả ngắn cách giải quyết (API mới, sửa logic, update thư viện, ...)
+
+## Changes
+- File/module quan trọng đã sửa (gạch đầu dòng ngắn)
+
+## How to test
+- [ ] Bước để reviewer chạy thử / nghiệm thu
 
 ## Test plan
 - [ ] ...
 ```
+
+- `Overview`/`Solution`/`Changes`/`How to test` là section tối thiểu bắt buộc; `Test plan` giữ nguyên như checklist nghiệm thu hiện có, có thể gộp chung với `How to test` nếu nội dung trùng.
+- Nếu thay đổi động tới UI/frontend/mobile: bắt buộc đính kèm screenshot hoặc GIF ngắn, ưu tiên dạng so sánh Before/After để reviewer thấy khác biệt không cần chạy code.
 
 Nếu title/body không khớp format trên: sửa lại trước khi `gh pr create`, không tạo PR sai convention.
 
