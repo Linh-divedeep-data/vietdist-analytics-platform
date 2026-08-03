@@ -1,5 +1,6 @@
 import logging
 
+import polars as pl
 import pytest
 
 from src.extract import parser
@@ -91,3 +92,36 @@ def test_download_all_sources_continues_after_one_file_fails(monkeypatch, capsys
     output = capsys.readouterr().err
     assert output.count("[ERROR]") == 1
     assert "SRC05_source.csv" in output
+
+
+def test_read_csv_source_casts_all_columns_to_string(tmp_path):
+    csv_path = tmp_path / "SRC01_sales.csv"
+    csv_path.write_text("id,amount,note\n1,100.5,ok\n2,200.75,ok\n3,300,ok\n")
+
+    df = parser.read_csv_source("SRC01_sales.csv", raw_dir=str(tmp_path))
+
+    assert df.height == 3
+    assert all(dtype == pl.String for dtype in df.dtypes)
+    assert df["id"].to_list() == ["1", "2", "3"]
+    assert df["amount"].to_list() == ["100.5", "200.75", "300"]
+
+
+def test_read_csv_source_missing_file_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        parser.read_csv_source("does_not_exist.csv", raw_dir=str(tmp_path))
+
+
+def test_read_csv_source_default_raw_dir_is_data_raw(monkeypatch):
+    captured = {}
+
+    def fake_read_csv(path, infer_schema_length):
+        captured["path"] = path
+        captured["infer_schema_length"] = infer_schema_length
+        return pl.DataFrame({"a": ["1"]})
+
+    monkeypatch.setattr(parser.pl, "read_csv", fake_read_csv)
+
+    parser.read_csv_source("SRC01_sales.csv")
+
+    assert str(captured["path"]) == "data/raw/SRC01_sales.csv"
+    assert captured["infer_schema_length"] == 0
