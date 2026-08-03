@@ -1,5 +1,6 @@
 import logging
 
+import polars as pl
 import pytest
 
 from src.extract import parser
@@ -91,3 +92,62 @@ def test_download_all_sources_continues_after_one_file_fails(monkeypatch, capsys
     output = capsys.readouterr().err
     assert output.count("[ERROR]") == 1
     assert "SRC05_source.csv" in output
+
+
+def test_read_csv_source_casts_all_columns_to_string(tmp_path):
+    csv_path = tmp_path / "SRC01_sales.csv"
+    csv_path.write_text("id,amount,note\n1,100.5,ok\n2,200.75,ok\n3,300,ok\n")
+
+    df = parser.read_csv_source("SRC01_sales.csv", raw_dir=str(tmp_path))
+
+    assert df.height == 3
+    assert all(dtype == pl.String for dtype in df.dtypes)
+    assert df["id"].to_list() == ["1", "2", "3"]
+    assert df["amount"].to_list() == ["100.5", "200.75", "300"]
+
+
+def test_read_csv_source_missing_file_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        parser.read_csv_source("does_not_exist.csv", raw_dir=str(tmp_path))
+
+
+def test_read_csv_source_default_raw_dir_is_data_raw(monkeypatch):
+    captured = {}
+
+    def fake_read_csv(path, infer_schema_length):
+        captured["path"] = path
+        captured["infer_schema_length"] = infer_schema_length
+        return pl.DataFrame({"a": ["1"]})
+
+    monkeypatch.setattr(parser.pl, "read_csv", fake_read_csv)
+
+    parser.read_csv_source("SRC01_sales.csv")
+
+    assert str(captured["path"]) == "data/raw/SRC01_sales.csv"
+    assert captured["infer_schema_length"] == 0
+
+
+def test_read_excel_source_casts_all_columns_to_string(monkeypatch):
+    fake_df = pl.DataFrame({"id": [1, 2], "amount": [10.5, 20.0]})
+    monkeypatch.setattr(parser.pl, "read_excel", lambda path: fake_df)
+
+    df = parser.read_excel_source("SRC02_target.xlsx", raw_dir="data/raw")
+
+    assert df.height == 2
+    assert all(dtype == pl.String for dtype in df.dtypes)
+    assert df["id"].to_list() == ["1", "2"]
+
+
+def test_read_excel_source_missing_file_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        parser.read_excel_source("does_not_exist.xlsx", raw_dir=str(tmp_path))
+
+
+def test_read_excel_source_reraises_import_error_with_install_hint(monkeypatch):
+    def fake_read_excel(path):
+        raise ImportError("no Excel engine found")
+
+    monkeypatch.setattr(parser.pl, "read_excel", fake_read_excel)
+
+    with pytest.raises(ImportError, match="uv add fastexcel"):
+        parser.read_excel_source("SRC02_target.xlsx", raw_dir="data/raw")
