@@ -5,12 +5,16 @@ list_files_in_folder()/download_file(); a per-file failure is caught
 (status="failed") so it doesn't crash the rest of the batch.
 """
 
+import logging
 from pathlib import Path
 
 import polars as pl
 
+from config.sources import REQUIRED_COLUMNS
 from src.gdrive_connector import download_file, list_files_in_folder
 from src.logger import get_logger
+
+_logger = logging.getLogger(__name__)
 
 
 def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
@@ -58,3 +62,31 @@ def read_excel_source(name: str, raw_dir: str = "data/raw") -> pl.DataFrame:
             f"Missing Excel engine to read {path} — run `uv add fastexcel`"
         ) from error
     return df.select(pl.all().cast(pl.String))
+
+
+class SchemaMismatchError(Exception):
+    def __init__(self, source_file: str, missing_cols: list[str], extra_cols: list[str]):
+        self.source_file = source_file
+        self.missing_cols = missing_cols
+        self.extra_cols = extra_cols
+        super().__init__(
+            f"{source_file}: missing required column(s) {missing_cols}"
+        )
+
+
+def validate_schema(df: pl.DataFrame, source_file: str) -> None:
+    required = set(REQUIRED_COLUMNS[source_file])
+    actual = set(df.columns)
+
+    missing_cols = sorted(required - actual)
+    extra_cols = sorted(actual - required)
+
+    if extra_cols:
+        _logger.warning(
+            "%s: unexpected extra column(s) %s (not in REQUIRED_COLUMNS)",
+            source_file,
+            extra_cols,
+        )
+
+    if missing_cols:
+        raise SchemaMismatchError(source_file, missing_cols, extra_cols)
