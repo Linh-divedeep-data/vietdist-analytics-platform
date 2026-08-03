@@ -1,4 +1,7 @@
+import os
+
 import pytest
+from googleapiclient.errors import HttpError
 
 from src import gdrive_connector
 
@@ -79,3 +82,75 @@ def test_get_folder_id_from_env_returns_value_when_set(monkeypatch):
     monkeypatch.setenv("GDRIVE_FOLDER_ID", "folder-xyz")
 
     assert gdrive_connector.get_folder_id_from_env() == "folder-xyz"
+
+
+class _FakeHttpResp:
+    def __init__(self, status):
+        self.status = status
+        self.reason = "error"
+
+
+def _http_error(status):
+    return HttpError(_FakeHttpResp(status), b"")
+
+
+def test_download_file_succeeds_after_two_retryable_errors(monkeypatch, tmp_path):
+    calls = []
+    sleeps = []
+    monkeypatch.setattr(gdrive_connector, "_sleep", lambda seconds: sleeps.append(seconds))
+
+    def fake_attempt(file_id, destination_path):
+        calls.append(file_id)
+        if len(calls) < 3:
+            raise _http_error(429)
+        with open(destination_path, "w") as fh:
+            fh.write("id,name\n1,a\n")
+
+    monkeypatch.setattr(gdrive_connector, "_download_attempt", fake_attempt)
+
+    result = gdrive_connector.download_file("file-1", "out.csv", destination_folder=str(tmp_path))
+
+    assert result == os.path.join(str(tmp_path), "out.csv")
+    assert os.path.exists(result)
+    with open(result) as fh:
+        assert fh.read() == "id,name\n1,a\n"
+    assert len(calls) == 3
+    assert sleeps == [1, 2]
+
+
+def test_download_file_raises_immediately_on_403_no_retry(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(gdrive_connector, "_sleep", lambda seconds: (_ for _ in ()).throw(AssertionError("should not sleep")))
+
+    def fake_attempt(file_id, destination_path):
+        calls.append(file_id)
+        raise _http_error(403)
+
+    monkeypatch.setattr(gdrive_connector, "_download_attempt", fake_attempt)
+
+    destination = os.path.join(str(tmp_path), "out.csv")
+    with pytest.raises(HttpError):
+        gdrive_connector.download_file("file-1", "out.csv", destination_folder=str(tmp_path))
+
+    assert len(calls) == 1
+    assert not os.path.exists(destination)
+
+
+def test_download_file_cleans_up_and_raises_after_exhausting_retries(monkeypatch, tmp_path):
+    calls = []
+    sleeps = []
+    monkeypatch.setattr(gdrive_connector, "_sleep", lambda seconds: sleeps.append(seconds))
+
+    def fake_attempt(file_id, destination_path):
+        calls.append(file_id)
+        raise _http_error(500)
+
+    monkeypatch.setattr(gdrive_connector, "_download_attempt", fake_attempt)
+
+    destination = os.path.join(str(tmp_path), "out.csv")
+    with pytest.raises(HttpError):
+        gdrive_connector.download_file("file-1", "out.csv", destination_folder=str(tmp_path))
+
+    assert len(calls) == 3
+    assert sleeps == [1, 2]
+    assert not os.path.exists(destination)
