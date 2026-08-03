@@ -59,3 +59,35 @@ def test_download_all_sources_logs_through_batch_id(monkeypatch, capsys):
     output = capsys.readouterr().err
     assert "batch_id=batch-123" in output
     assert output.count("\n") >= 10
+
+
+def test_download_all_sources_continues_after_one_file_fails(monkeypatch, capsys):
+    monkeypatch.setattr(parser, "list_files_in_folder", lambda folder_id: _fake_files())
+
+    def fake_download_file(file_id, file_name):
+        if file_id == "file-05":
+            raise ConnectionError("network unreachable")
+        return f"data/raw/{file_name}"
+
+    monkeypatch.setattr(parser, "download_file", fake_download_file)
+
+    records = parser.download_all_sources("folder-abc", "batch-123")
+
+    assert len(records) == 10
+
+    failed = [r for r in records if r["status"] == "failed"]
+    succeeded = [r for r in records if r["status"] == "success"]
+
+    assert len(failed) == 1
+    assert failed[0]["source_file"] == "SRC05_source.csv"
+    assert failed[0]["path"] is None
+    assert "network unreachable" in failed[0]["error"]
+
+    assert len(succeeded) == 9
+    for record in succeeded:
+        assert record["error"] is None
+        assert record["path"] == f"data/raw/{record['source_file']}"
+
+    output = capsys.readouterr().err
+    assert output.count("[ERROR]") == 1
+    assert "SRC05_source.csv" in output
