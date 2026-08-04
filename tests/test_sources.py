@@ -1,7 +1,12 @@
 import ast
 from pathlib import Path
 
-from config.sources import CSV_SOURCES, DATE_FORMAT_BY_SOURCE, EXCEL_SOURCES, REQUIRED_COLUMNS
+from config.sources import (
+    CSV_SOURCES,
+    DATE_FORMAT_BY_SOURCE,
+    EXCEL_SOURCES,
+    REQUIRED_COLUMNS,
+)
 
 
 def test_total_source_count_is_10():
