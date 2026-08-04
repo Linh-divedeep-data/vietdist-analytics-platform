@@ -9,6 +9,7 @@ from src.extract.parser import SchemaMismatchError
 from src.transform_silver import (
     cast_date_columns,
     cast_money_and_qty_columns,
+    standardize_text_columns,
     validate_required_columns,
 )
 
@@ -228,3 +229,37 @@ def test_full_cast_pipeline_on_excel_source_leaves_no_string_on_cast_columns():
     assert result["gross_amount"].to_list() == [11400000.0]
     assert result["order_date"].to_list() == [date(2024, 1, 13)]
     assert result["expected_delivery_date"].to_list() == [date(2024, 1, 15)]
+
+
+def test_standardize_text_columns_strips_leading_and_trailing_whitespace():
+    df = pl.DataFrame({"region": ["  Miền Nam  ", "Miền Bắc"]})
+
+    result = standardize_text_columns(df, ["region"])
+
+    assert result["region"].to_list() == ["MIỀN NAM", "MIỀN BẮC"]
+
+
+def test_standardize_text_columns_uppercases_vietnamese_diacritics():
+    df = pl.DataFrame({"channel": ["modern trade", "e-commerce"]})
+
+    result = standardize_text_columns(df, ["channel"])
+
+    assert result["channel"].to_list() == ["MODERN TRADE", "E-COMMERCE"]
+
+
+def test_standardize_text_columns_only_touches_listed_columns():
+    df = pl.DataFrame({"region": [" mien nam "], "customer_id": ["cus00001"]})
+
+    result = standardize_text_columns(df, ["region"])
+
+    assert result["region"].to_list() == ["MIEN NAM"]
+    assert result["customer_id"].to_list() == ["cus00001"]
+
+
+def test_standardize_text_columns_casts_multiple_columns_in_one_call():
+    df = pl.DataFrame({"region": [" mien nam "], "status": [" active "]})
+
+    result = standardize_text_columns(df, ["region", "status"])
+
+    assert result["region"].to_list() == ["MIEN NAM"]
+    assert result["status"].to_list() == ["ACTIVE"]
