@@ -10,6 +10,7 @@ import logging
 
 import polars as pl
 
+from config.sources import DATE_FORMAT_BY_SOURCE
 from src.extract.parser import SchemaMismatchError, validate_schema
 
 _logger = logging.getLogger(__name__)
@@ -33,3 +34,32 @@ def cast_money_and_qty_columns(df: pl.DataFrame, columns: list[str]) -> pl.DataF
     return df.with_columns(
         pl.col(col).str.replace_all(",", "").cast(pl.Float64) for col in columns
     )
+
+
+def cast_date_columns(df: pl.DataFrame, columns: list[str], source_file: str) -> pl.DataFrame:
+    """Cast date columns to pl.Date using DATE_FORMAT_BY_SOURCE, logging the post-parse NULL ratio per column."""
+    fmt = DATE_FORMAT_BY_SOURCE[source_file]
+    result = df.with_columns(
+        pl.col(col).str.strptime(pl.Date, fmt, strict=False) for col in columns
+    )
+
+    for col in columns:
+        null_ratio = result[col].null_count() / result.height
+        if null_ratio > 0.5:
+            _logger.warning(
+                "%s.%s: %.0f%% NULL sau khi parse ngày (format=%s) — nghi lệch format, không phải data rác thật",
+                source_file,
+                col,
+                null_ratio * 100,
+                fmt,
+            )
+        else:
+            _logger.info(
+                "%s.%s: %.0f%% NULL sau khi parse ngày (format=%s)",
+                source_file,
+                col,
+                null_ratio * 100,
+                fmt,
+            )
+
+    return result
