@@ -1,7 +1,7 @@
 import ast
 from pathlib import Path
 
-from config.sources import CSV_SOURCES, EXCEL_SOURCES, REQUIRED_COLUMNS
+from config.sources import CSV_SOURCES, DATE_FORMAT_BY_SOURCE, EXCEL_SOURCES, REQUIRED_COLUMNS
 
 
 def test_total_source_count_is_10():
@@ -42,6 +42,16 @@ def test_required_columns_values_are_non_empty_lists():
         assert isinstance(columns, list)
         assert len(columns) > 0
         assert len(columns) == len(set(columns)), f"{source_file} has duplicate columns"
+
+
+def test_date_format_by_source_has_entry_for_every_source():
+    assert set(DATE_FORMAT_BY_SOURCE.keys()) == set(CSV_SOURCES) | set(EXCEL_SOURCES)
+
+
+def test_date_format_by_source_values_are_non_empty_strptime_strings():
+    for source_file, fmt in DATE_FORMAT_BY_SOURCE.items():
+        assert isinstance(fmt, str)
+        assert fmt.startswith("%"), f"{source_file}: {fmt!r} doesn't look like a strptime format"
 
 
 def test_sources_module_does_not_import_from_src():
