@@ -5,6 +5,7 @@ import os
 import polars as pl
 
 from config.settings import BRONZE_DIR, RAW_DIR
+from src.extract.ingest_log import write_ingest_log
 from src.extract.registry import UNIT_OF_WORK
 
 
@@ -31,4 +32,5 @@ def run_bronze_ingestion(
         df, record = run_fn(raw_dir, run_date, batch_id)
         write_bronze_parquet(df, record, out_dir)
         records.append(record)
+    write_ingest_log(records, out_dir)
     return records

@@ -126,7 +126,7 @@ def test_run_bronze_ingestion_happy_path_writes_file_per_source(tmp_path, monkey
     )
 
     out_dir = get_bronze_output_dir("2026-08-04", bronze_dir=str(tmp_path))
-    written = sorted(os.listdir(out_dir))
+    written = sorted(f for f in os.listdir(out_dir) if f != "ingest_log.parquet")
     assert written == ["srcA.parquet", "srcB.parquet", "srcC.parquet"]
     assert len(records) == 3
     assert all(r["status"] == "success" for r in records)
@@ -145,7 +145,7 @@ def test_run_bronze_ingestion_continues_after_one_source_fails(tmp_path, monkeyp
     )
 
     out_dir = get_bronze_output_dir("2026-08-04", bronze_dir=str(tmp_path))
-    written = sorted(os.listdir(out_dir))
+    written = sorted(f for f in os.listdir(out_dir) if f != "ingest_log.parquet")
     assert written == ["srcA.parquet", "srcC.parquet"]
     assert len(records) == 3
     statuses = {r["source_name"]: r["status"] for r in records}
@@ -183,3 +183,23 @@ def test_run_bronze_ingestion_row_count_stable_across_reruns(tmp_path, monkeypat
     }
 
     assert first_counts == second_counts == {"srcA": 3, "srcB": 2}
+
+
+def test_run_bronze_ingestion_writes_ingest_log_parquet(tmp_path, monkeypatch):
+    fake_registry = {
+        "SRCA.csv": _fake_source("srcA", "success"),
+        "SRCB.csv": _fake_source("srcB", "failed"),
+    }
+    monkeypatch.setattr("src.extract.orchestrator.UNIT_OF_WORK", fake_registry)
+
+    records = run_bronze_ingestion(
+        run_date="2026-08-04", batch_id="batch-1", raw_dir=str(tmp_path), bronze_dir=str(tmp_path)
+    )
+
+    out_dir = get_bronze_output_dir("2026-08-04", bronze_dir=str(tmp_path))
+    log_path = os.path.join(out_dir, "ingest_log.parquet")
+    assert os.path.exists(log_path)
+
+    log_df = pl.read_parquet(log_path)
+    assert log_df.height == len(records) == 2
+    assert set(log_df["source_name"].to_list()) == {"srcA", "srcB"}
