@@ -26,3 +26,10 @@ def validate_required_columns(df: pl.DataFrame, source_file: str) -> None:
             error.missing_cols,
         )
         raise
+
+
+def cast_money_and_qty_columns(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+    """Strip thousand-separator commas and cast money/quantity columns to Float64."""
+    return df.with_columns(
+        pl.col(col).str.replace_all(",", "").cast(pl.Float64) for col in columns
+    )
