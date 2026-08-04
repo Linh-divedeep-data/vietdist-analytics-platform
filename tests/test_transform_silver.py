@@ -138,3 +138,93 @@ def test_cast_date_columns_does_not_log_warning_when_null_ratio_normal(caplog):
         cast_date_columns(df, ["order_date"], "SRC01_sales_transactions.csv")
 
     assert caplog.text == ""
+
+
+def test_full_cast_pipeline_on_csv_source_leaves_no_string_on_cast_columns():
+    money_qty_cols = ["quantity", "unit_price", "discount_pct", "discount_amount", "gross_amount", "net_amount"]
+    date_cols = ["order_date"]
+
+    df = pl.DataFrame(
+        {
+            "order_id": ["ORD0010001"],
+            "order_date": ["2024-08-22"],
+            "order_month": ["8"],
+            "order_quarter": ["3"],
+            "order_year": ["2024"],
+            "customer_id": ["CUS01590"],
+            "region": ["Miền Nam"],
+            "province": ["TP.HCM"],
+            "channel": ["Modern Trade"],
+            "employee_id": ["EMP1079"],
+            "product_id": ["PRD0055"],
+            "product_category": ["Thực phẩm"],
+            "quantity": ["109"],
+            "unit_price": ["8,500"],
+            "discount_pct": ["2"],
+            "discount_amount": ["18,500.0"],
+            "gross_amount": ["926,500"],
+            "net_amount": ["908,000.0"],
+            "delivery_status": ["Delivered"],
+            "payment_method": ["Công nợ"],
+            "payment_status": ["Paid"],
+        }
+    )
+
+    validate_required_columns(df, "SRC01_sales_transactions.csv")  # must not raise
+    result = cast_money_and_qty_columns(df, money_qty_cols)
+    result = cast_date_columns(result, date_cols, "SRC01_sales_transactions.csv")
+
+    for col in money_qty_cols:
+        assert result.schema[col] == pl.Float64, f"{col} still not Float64: {result.schema[col]}"
+    for col in date_cols:
+        assert result.schema[col] == pl.Date, f"{col} still not Date: {result.schema[col]}"
+
+    assert result["net_amount"].to_list() == [908000.0]
+    assert result["order_date"].to_list() == [date(2024, 8, 22)]
+
+
+def test_full_cast_pipeline_on_excel_source_leaves_no_string_on_cast_columns():
+    money_qty_cols = [
+        "qty_ordered", "qty_delivered", "fill_rate_pct",
+        "unit_price_list", "distributor_price", "gross_amount", "delivered_amount",
+    ]
+    date_cols = ["order_date", "expected_delivery_date", "actual_delivery_date"]
+
+    df = pl.DataFrame(
+        {
+            "order_id": ["ORD-D001"],
+            "order_date": ["2024-01-13"],
+            "order_month": ["1"],
+            "order_quarter": ["1"],
+            "distributor_id": ["DIST0001"],
+            "region": ["Miền Bắc"],
+            "channel": ["Traditional Trade"],
+            "product_id": ["PRD0010"],
+            "product_category": ["Đồ uống"],
+            "qty_ordered": ["1,000"],
+            "qty_delivered": ["950"],
+            "fill_rate_pct": ["95"],
+            "unit_price_list": ["12,000"],
+            "distributor_price": ["10,500"],
+            "gross_amount": ["11,400,000"],
+            "delivered_amount": ["9,975,000"],
+            "expected_delivery_date": ["2024-01-15"],
+            "actual_delivery_date": ["2024-01-16"],
+            "ontime_delivery": ["false"],
+            "delivery_status": ["Delivered"],
+            "payment_terms": ["Net 30"],
+        }
+    )
+
+    validate_required_columns(df, "SRC05_distributor_orders.xlsx")  # must not raise
+    result = cast_money_and_qty_columns(df, money_qty_cols)
+    result = cast_date_columns(result, date_cols, "SRC05_distributor_orders.xlsx")
+
+    for col in money_qty_cols:
+        assert result.schema[col] == pl.Float64, f"{col} still not Float64: {result.schema[col]}"
+    for col in date_cols:
+        assert result.schema[col] == pl.Date, f"{col} still not Date: {result.schema[col]}"
+
+    assert result["gross_amount"].to_list() == [11400000.0]
+    assert result["order_date"].to_list() == [date(2024, 1, 13)]
+    assert result["expected_delivery_date"].to_list() == [date(2024, 1, 15)]
