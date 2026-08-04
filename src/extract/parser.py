@@ -9,6 +9,7 @@ from pathlib import Path
 
 import polars as pl
 
+from config.settings import RAW_DIR
 from src.gdrive_connector import download_file, list_files_in_folder
 from src.logger import get_logger
 
@@ -44,12 +45,12 @@ def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
     return records
 
 
-def read_csv_source(name: str, raw_dir: str = "data/raw") -> pl.DataFrame:
+def read_csv_source(name: str, raw_dir: str = RAW_DIR) -> pl.DataFrame:
     path = Path(raw_dir) / name
     return pl.read_csv(path, infer_schema_length=0)
 
 
-def read_excel_source(name: str, raw_dir: str = "data/raw") -> pl.DataFrame:
+def read_excel_source(name: str, raw_dir: str = RAW_DIR) -> pl.DataFrame:
     path = Path(raw_dir) / name
     try:
         df = pl.read_excel(path)
