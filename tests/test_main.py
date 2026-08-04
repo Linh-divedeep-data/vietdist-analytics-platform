@@ -20,7 +20,7 @@ def _reset_shared_logger():
 
 
 def test_all_log_lines_share_one_batch_id(capsys):
-    exit_code = main()
+    exit_code = main(["--layer", "bronze"])
 
     lines = capsys.readouterr().err.strip().splitlines()
     assert len(lines) >= 2
@@ -36,15 +36,37 @@ def test_all_log_lines_share_one_batch_id(capsys):
 
 
 def test_different_runs_get_different_batch_ids(capsys):
-    main()
+    main(["--layer", "bronze"])
     first_run_lines = capsys.readouterr().err.strip().splitlines()
     first_batch_id = LOG_LINE_RE.match(first_run_lines[0]).group("batch_id")
 
-    main()
+    main(["--layer", "bronze"])
     second_run_lines = capsys.readouterr().err.strip().splitlines()
     second_batch_id = LOG_LINE_RE.match(second_run_lines[0]).group("batch_id")
 
     assert first_batch_id != second_batch_id
+
+
+def test_missing_layer_argument_errors(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main([])
+
+    assert exc_info.value.code == 2
+    assert "--layer" in capsys.readouterr().err
+
+
+def test_invalid_layer_choice_errors(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--layer", "silver"])
+
+    assert exc_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_valid_layer_argument_runs(capsys):
+    exit_code = main(["--layer", "bronze"])
+
+    assert exit_code == 0
 
 
 def test_check_layer_results_returns_1_and_logs_error_on_any_failure(capsys):

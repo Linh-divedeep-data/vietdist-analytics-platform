@@ -13,10 +13,18 @@ no webhook/SMTP available to test against in this capstone):
         send_alert(...)  # e.g. Slack/email webhook, not implemented here
 """
 
+import argparse
 import sys
 import uuid
 
 from src.logger import get_logger
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Parse CLI args, currently just the required --layer flag."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--layer", choices=["bronze"], required=True)
+    return parser.parse_args(argv)
 
 
 def _run_placeholder_layer(batch_id: str) -> list[dict]:
@@ -45,8 +53,9 @@ def _check_layer_results(records: list[dict], layer_name: str, batch_id: str) ->
     return 0
 
 
-def main() -> int:
-    """Run the pipeline once with a fresh batch_id and return the process exit code."""
+def main(argv: list[str] | None = None) -> int:
+    """Parse CLI args, run the pipeline once with a fresh batch_id, and return the process exit code."""
+    _parse_args(argv)
     batch_id = str(uuid.uuid4())
     logger = get_logger(batch_id)
     logger.info("pipeline run started")
