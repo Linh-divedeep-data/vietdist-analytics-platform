@@ -49,3 +49,5 @@ docs/superpowers/
 openspec/
 bin/jira
 jira.env.example
+CONTRIBUTING.md
+docs/WORKSPACE_SETUP.md
