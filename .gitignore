@@ -34,3 +34,13 @@ __pycache__/
 .beads/proxieddb/
 # Added by code-review-graph
 .code-review-graph/
+
+# AI-assisted dev tooling — local only, not part of public portfolio
+.claude/
+.mcp.json
+.beads/
+CLAUDE.md
+AGENTS.md
+docs/jira.md
+docs/jira_new_structure.md
+docs/superpowers/
