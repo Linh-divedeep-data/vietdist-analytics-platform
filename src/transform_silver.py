@@ -70,3 +70,8 @@ def standardize_text_columns(df: pl.DataFrame, columns: list[str]) -> pl.DataFra
     return df.with_columns(
         pl.col(col).str.strip_chars().str.to_uppercase() for col in columns
     )
+
+
+def drop_duplicate_rows(df: pl.DataFrame) -> pl.DataFrame:
+    """Remove exact full-row duplicates (e.g. repeated rows in customer_master)."""
+    return df.unique(maintain_order=True)

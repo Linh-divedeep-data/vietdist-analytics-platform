@@ -9,6 +9,7 @@ from src.extract.parser import SchemaMismatchError
 from src.transform_silver import (
     cast_date_columns,
     cast_money_and_qty_columns,
+    drop_duplicate_rows,
     standardize_text_columns,
     validate_required_columns,
 )
@@ -263,3 +264,37 @@ def test_standardize_text_columns_casts_multiple_columns_in_one_call():
 
     assert result["region"].to_list() == ["MIEN NAM"]
     assert result["status"].to_list() == ["ACTIVE"]
+
+
+def test_drop_duplicate_rows_removes_exact_duplicate_rows():
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS001", "CUS002"], "name": ["A", "A", "B"]})
+
+    result = drop_duplicate_rows(df)
+
+    assert result.shape[0] == 2
+    assert result.shape[0] == result.unique().shape[0]
+
+
+def test_drop_duplicate_rows_leaves_dataframe_unchanged_when_no_duplicates():
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS002"], "name": ["A", "B"]})
+
+    result = drop_duplicate_rows(df)
+
+    assert result.shape[0] == 2
+    assert set(result["customer_id"].to_list()) == {"CUS001", "CUS002"}
+
+
+def test_drop_duplicate_rows_keeps_rows_that_differ_in_only_one_column():
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS001"], "name": ["A", "B"]})
+
+    result = drop_duplicate_rows(df)
+
+    assert result.shape[0] == 2
+
+
+def test_drop_duplicate_rows_matches_parent_acceptance_criteria():
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS001", "CUS001"], "name": ["A", "A", "A"]})
+
+    result = drop_duplicate_rows(df)
+
+    assert result.shape[0] == result.unique().shape[0]
