@@ -1,3 +1,5 @@
+import logging
+
 import polars as pl
 import pytest
 
@@ -25,3 +27,16 @@ def test_validate_required_columns_raises_when_one_required_column_missing():
     assert error.missing_cols == ["phone"]
     assert "phone" in str(error)
     assert "SRC03_customer_master.csv" in str(error)
+
+
+def test_validate_required_columns_logs_warning_before_raising_on_missing_column(caplog):
+    columns = REQUIRED_COLUMNS["SRC03_customer_master.csv"].copy()
+    columns.remove("phone")
+    df = pl.DataFrame({col: ["x"] for col in columns})
+
+    with caplog.at_level(logging.WARNING), pytest.raises(SchemaMismatchError):
+        validate_required_columns(df, "SRC03_customer_master.csv")
+
+    assert "SRC03_customer_master.csv" in caplog.text
+    assert "phone" in caplog.text
+    assert "Bronze" in caplog.text
