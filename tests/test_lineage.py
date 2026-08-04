@@ -61,3 +61,43 @@ def test_attach_lineage_ingested_at_is_close_to_now_utc():
     after = datetime.now(UTC)
     stamped = result["_ingested_at"][0]
     assert before <= stamped <= after
+
+
+def test_cast_to_string_casts_all_columns_to_string_dtype():
+    df = _sample_df().with_columns(pl.col("id").cast(pl.Int64))
+
+    result = lineage.cast_to_string(df)
+
+    assert all(dtype == pl.String for dtype in result.dtypes)
+
+
+def test_cast_to_string_casts_datetime_column_from_attach_lineage():
+    df = _sample_df()
+    with_lineage = lineage.attach_lineage(
+        df, source_file="SRC01_sales.csv", run_date="2026-08-04", batch_id="batch-123"
+    )
+    assert with_lineage["_ingested_at"].dtype != pl.String  # sanity: still Datetime before cast
+
+    result = lineage.cast_to_string(with_lineage)
+
+    assert all(dtype == pl.String for dtype in result.dtypes)
+    assert result["_ingested_at"].to_list()[0] is not None
+
+
+def test_cast_to_string_preserves_columns_and_row_count():
+    df = _sample_df().with_columns(pl.col("id").cast(pl.Int64))
+
+    result = lineage.cast_to_string(df)
+
+    assert result.columns == df.columns
+    assert result.height == df.height
+    assert result.width == df.width
+
+
+def test_cast_to_string_preserves_values_as_strings():
+    df = _sample_df().with_columns(pl.col("id").cast(pl.Int64))
+
+    result = lineage.cast_to_string(df)
+
+    assert result["id"].to_list() == ["1", "2", "3"]
+    assert result["amount"].to_list() == ["100", "200", "300"]

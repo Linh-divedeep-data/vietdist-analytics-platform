@@ -15,3 +15,7 @@ def attach_lineage(
         pl.lit(datetime.now(UTC)).alias("_ingested_at"),
         pl.lit(batch_id).alias("_batch_id"),
     )
+
+
+def cast_to_string(df: pl.DataFrame) -> pl.DataFrame:
+    return df.select(pl.all().cast(pl.String))
