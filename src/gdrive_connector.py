@@ -15,6 +15,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
+from config.constants import GDRIVE_BACKOFF_SECONDS, GDRIVE_MAX_ATTEMPTS
+
 load_dotenv()
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -60,9 +62,9 @@ def get_folder_id_from_env() -> str:
     return folder_id
 
 
-_MAX_ATTEMPTS = 3
+_MAX_ATTEMPTS = GDRIVE_MAX_ATTEMPTS
 _RETRYABLE_STATUS_CODES = {429, 500, 503}
-_BACKOFF_SECONDS = (1, 2, 4)
+_BACKOFF_SECONDS = GDRIVE_BACKOFF_SECONDS
 _sleep = time.sleep
 
 
