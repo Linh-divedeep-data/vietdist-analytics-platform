@@ -78,3 +78,16 @@ REQUIRED_COLUMNS: dict[str, list[str]] = {
         "status", "created_by",
     ],
 }
+
+DATE_FORMAT_BY_SOURCE: dict[str, str] = {
+    "SRC01_sales_transactions.csv": "%Y-%m-%d",
+    "SRC02_sales_target_plan.xlsx": "%Y-%m-%d",
+    "SRC03_customer_master.csv": "%Y-%m-%d",
+    "SRC04_product_master.xlsx": "%Y-%m-%d",
+    "SRC05_distributor_orders.xlsx": "%Y-%m-%d",
+    "SRC06_distributor_master.csv": "%Y-%m-%d",
+    "SRC07_employee_master.xlsx": "%Y-%m-%d",
+    "SRC08_territory_mapping.xlsx": "%Y-%m-%d",
+    "SRC09_return_transactions.csv": "%Y-%m-%d",
+    "SRC10_promotion_program.xlsx": "%Y-%m-%d",
+}
