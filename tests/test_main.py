@@ -19,7 +19,43 @@ def _reset_shared_logger():
     logger.handlers.clear()
 
 
-def test_all_log_lines_share_one_batch_id(capsys):
+def test_bronze_layer_calls_run_bronze_ingestion_with_run_date_and_batch_id(monkeypatch):
+    captured = {}
+
+    def fake_run_bronze_ingestion(run_date, batch_id):
+        captured["run_date"] = run_date
+        captured["batch_id"] = batch_id
+        return [{"source": "src01", "status": "success"}]
+
+    monkeypatch.setattr("main.run_bronze_ingestion", fake_run_bronze_ingestion)
+
+    exit_code = main(["--layer", "bronze"])
+
+    assert exit_code == 0
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", captured["run_date"])
+    assert captured["batch_id"]
+
+
+def test_bronze_layer_returns_1_when_run_bronze_ingestion_reports_failure(monkeypatch):
+    monkeypatch.setattr(
+        "main.run_bronze_ingestion",
+        lambda run_date, batch_id: [
+            {"source": "src01", "status": "success"},
+            {"source": "src02", "status": "failed"},
+        ],
+    )
+
+    exit_code = main(["--layer", "bronze"])
+
+    assert exit_code == 1
+
+
+def test_all_log_lines_share_one_batch_id(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "main.run_bronze_ingestion",
+        lambda run_date, batch_id: [{"source": "src01", "status": "success"}],
+    )
+
     exit_code = main(["--layer", "bronze"])
 
     lines = capsys.readouterr().err.strip().splitlines()
@@ -35,16 +71,20 @@ def test_all_log_lines_share_one_batch_id(capsys):
     assert exit_code == 0
 
 
-def test_different_runs_get_different_batch_ids(capsys):
-    main(["--layer", "bronze"])
-    first_run_lines = capsys.readouterr().err.strip().splitlines()
-    first_batch_id = LOG_LINE_RE.match(first_run_lines[0]).group("batch_id")
+def test_different_runs_get_different_batch_ids(monkeypatch):
+    seen_batch_ids = []
+
+    def fake_run_bronze_ingestion(run_date, batch_id):
+        seen_batch_ids.append(batch_id)
+        return [{"source": "src01", "status": "success"}]
+
+    monkeypatch.setattr("main.run_bronze_ingestion", fake_run_bronze_ingestion)
 
     main(["--layer", "bronze"])
-    second_run_lines = capsys.readouterr().err.strip().splitlines()
-    second_batch_id = LOG_LINE_RE.match(second_run_lines[0]).group("batch_id")
+    main(["--layer", "bronze"])
 
-    assert first_batch_id != second_batch_id
+    assert len(seen_batch_ids) == 2
+    assert seen_batch_ids[0] != seen_batch_ids[1]
 
 
 def test_missing_layer_argument_errors(capsys):
@@ -61,12 +101,6 @@ def test_invalid_layer_choice_errors(capsys):
 
     assert exc_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
-
-
-def test_valid_layer_argument_runs(capsys):
-    exit_code = main(["--layer", "bronze"])
-
-    assert exit_code == 0
 
 
 def test_check_layer_results_returns_1_and_logs_error_on_any_failure(capsys):
