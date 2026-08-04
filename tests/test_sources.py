@@ -1,7 +1,7 @@
 import ast
 from pathlib import Path
 
-from config.sources import CSV_SOURCES, EXCEL_SOURCES
+from config.sources import CSV_SOURCES, EXCEL_SOURCES, REQUIRED_COLUMNS
 
 
 def test_total_source_count_is_10():
@@ -31,6 +31,17 @@ def test_excel_sources_are_the_expected_6():
         "SRC08_territory_mapping.xlsx",
         "SRC10_promotion_program.xlsx",
     }
+
+
+def test_required_columns_has_entry_for_every_source():
+    assert set(REQUIRED_COLUMNS.keys()) == set(CSV_SOURCES) | set(EXCEL_SOURCES)
+
+
+def test_required_columns_values_are_non_empty_lists():
+    for source_file, columns in REQUIRED_COLUMNS.items():
+        assert isinstance(columns, list)
+        assert len(columns) > 0
+        assert len(columns) == len(set(columns)), f"{source_file} has duplicate columns"
 
 
 def test_sources_module_does_not_import_from_src():
