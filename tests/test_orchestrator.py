@@ -156,3 +156,30 @@ def test_run_bronze_ingestion_returns_one_record_per_registered_source():
     from src.extract.registry import UNIT_OF_WORK as real_registry
 
     assert len(real_registry) == 10  # sanity: loop iterates the real 10-source registry
+
+
+def test_run_bronze_ingestion_row_count_stable_across_reruns(tmp_path, monkeypatch):
+    fake_registry = {
+        "SRCA.csv": _fake_source("srcA", "success", rows=3),
+        "SRCB.csv": _fake_source("srcB", "success", rows=2),
+    }
+    monkeypatch.setattr("src.extract.orchestrator.UNIT_OF_WORK", fake_registry)
+
+    run_bronze_ingestion(
+        run_date="2026-08-04", batch_id="b1", raw_dir=str(tmp_path), bronze_dir=str(tmp_path)
+    )
+    out_dir = get_bronze_output_dir("2026-08-04", bronze_dir=str(tmp_path))
+    first_counts = {
+        name: pl.read_parquet(os.path.join(out_dir, f"{name}.parquet")).height
+        for name in ("srcA", "srcB")
+    }
+
+    run_bronze_ingestion(
+        run_date="2026-08-04", batch_id="b2", raw_dir=str(tmp_path), bronze_dir=str(tmp_path)
+    )
+    second_counts = {
+        name: pl.read_parquet(os.path.join(out_dir, f"{name}.parquet")).height
+        for name in ("srcA", "srcB")
+    }
+
+    assert first_counts == second_counts == {"srcA": 3, "srcB": 2}
