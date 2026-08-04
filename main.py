@@ -20,12 +20,14 @@ from src.logger import get_logger
 
 
 def _run_placeholder_layer(batch_id: str) -> list[dict]:
+    """Stand in for the real Bronze layer until Epic 1 wires run_bronze_ingestion() in here."""
     logger = get_logger(batch_id)
     logger.info("placeholder layer running")
     return [{"source": "placeholder", "status": "success"}]
 
 
 def _check_layer_results(records: list[dict], layer_name: str, batch_id: str) -> int:
+    """Log a summary for one layer's run and return the process exit code."""
     logger = get_logger(batch_id)
     total = len(records)
     failed = [r for r in records if r.get("status") != "success"]
@@ -44,6 +46,7 @@ def _check_layer_results(records: list[dict], layer_name: str, batch_id: str) ->
 
 
 def main() -> int:
+    """Run the pipeline once with a fresh batch_id and return the process exit code."""
     batch_id = str(uuid.uuid4())
     logger = get_logger(batch_id)
     logger.info("pipeline run started")

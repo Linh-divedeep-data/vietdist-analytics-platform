@@ -13,6 +13,7 @@ def build_ingest_log_record(
     duration_sec: float,
     source_platform: str = "google_drive",
 ) -> dict:
+    """Build one ingest-log record summarizing how a single source was processed."""
     return {
         "batch_id": batch_id,
         "source_name": os.path.splitext(source_file)[0],
@@ -25,6 +26,7 @@ def build_ingest_log_record(
 
 
 def write_ingest_log(records: list[dict], bronze_run_dir: str) -> str:
+    """Write all ingest-log records for a run into one Parquet file, overwriting any prior run."""
     os.makedirs(bronze_run_dir, exist_ok=True)
     path = os.path.join(bronze_run_dir, "ingest_log.parquet")
     pl.DataFrame(records).write_parquet(path)

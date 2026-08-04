@@ -16,6 +16,7 @@ def process_source(
     run_date: str,
     batch_id: str,
 ) -> tuple[pl.DataFrame | None, dict]:
+    """Read, validate, tag, and cast one source, classifying the outcome as success/schema_mismatch/failed."""
     start = time.perf_counter()
     try:
         df = read_fn(source_file, raw_dir)

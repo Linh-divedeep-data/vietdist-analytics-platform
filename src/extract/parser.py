@@ -19,6 +19,7 @@ _logger = logging.getLogger(__name__)
 
 
 def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
+    """Download every file in a Drive folder, recording success/failure per file."""
     logger = get_logger(batch_id)
     files = list_files_in_folder(folder_id)
 
@@ -50,11 +51,13 @@ def download_all_sources(folder_id: str, batch_id: str) -> list[dict]:
 
 
 def read_csv_source(name: str, raw_dir: str = RAW_DIR) -> pl.DataFrame:
+    """Read a CSV source file, keeping every column as raw string."""
     path = Path(raw_dir) / name
     return pl.read_csv(path, infer_schema_length=0)
 
 
 def read_excel_source(name: str, raw_dir: str = RAW_DIR) -> pl.DataFrame:
+    """Read an Excel source file, casting every column to string."""
     path = Path(raw_dir) / name
     try:
         df = pl.read_excel(path)
@@ -67,6 +70,7 @@ def read_excel_source(name: str, raw_dir: str = RAW_DIR) -> pl.DataFrame:
 
 class SchemaMismatchError(Exception):
     def __init__(self, source_file: str, missing_cols: list[str], extra_cols: list[str]):
+        """Store the offending source_file and its missing/extra columns for the error message."""
         self.source_file = source_file
         self.missing_cols = missing_cols
         self.extra_cols = extra_cols
@@ -76,6 +80,7 @@ class SchemaMismatchError(Exception):
 
 
 def validate_schema(df: pl.DataFrame, source_file: str) -> None:
+    """Raise SchemaMismatchError if df is missing any of source_file's required columns."""
     required = set(REQUIRED_COLUMNS[source_file])
     actual = set(df.columns)
 
