@@ -63,3 +63,10 @@ def cast_date_columns(df: pl.DataFrame, columns: list[str], source_file: str) ->
             )
 
     return result
+
+
+def standardize_text_columns(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+    """Strip leading/trailing whitespace and uppercase business text columns."""
+    return df.with_columns(
+        pl.col(col).str.strip_chars().str.to_uppercase() for col in columns
+    )
