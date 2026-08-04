@@ -1,11 +1,16 @@
 import logging
+from datetime import date
 
 import polars as pl
 import pytest
 
 from config.sources import REQUIRED_COLUMNS
 from src.extract.parser import SchemaMismatchError
-from src.transform_silver import cast_money_and_qty_columns, validate_required_columns
+from src.transform_silver import (
+    cast_date_columns,
+    cast_money_and_qty_columns,
+    validate_required_columns,
+)
 
 
 def test_validate_required_columns_passes_when_all_required_columns_present():
@@ -79,3 +84,57 @@ def test_cast_money_and_qty_columns_casts_multiple_columns_in_one_call():
     assert result.schema["unit_price"] == pl.Float64
     assert result["quantity"].to_list() == [109.0]
     assert result["unit_price"].to_list() == [8500.0]
+
+
+def test_cast_date_columns_casts_csv_source_order_date_to_pl_date():
+    df = pl.DataFrame({"order_date": ["2024-08-22", "2024-12-28"]})
+
+    result = cast_date_columns(df, ["order_date"], "SRC01_sales_transactions.csv")
+
+    assert result.schema["order_date"] == pl.Date
+    assert result["order_date"].to_list() == [date(2024, 8, 22), date(2024, 12, 28)]
+
+
+def test_cast_date_columns_casts_excel_source_order_date_to_pl_date():
+    df = pl.DataFrame({"order_date": ["2024-01-13", "2024-01-14"]})
+
+    result = cast_date_columns(df, ["order_date"], "SRC05_distributor_orders.xlsx")
+
+    assert result.schema["order_date"] == pl.Date
+    assert result["order_date"].to_list() == [date(2024, 1, 13), date(2024, 1, 14)]
+
+
+def test_cast_date_columns_sets_null_for_unparseable_row_instead_of_raising():
+    df = pl.DataFrame({"order_date": ["2024-08-22", "not-a-date", "2024-12-28"]})
+
+    result = cast_date_columns(df, ["order_date"], "SRC01_sales_transactions.csv")
+
+    assert result["order_date"].to_list() == [date(2024, 8, 22), None, date(2024, 12, 28)]
+
+
+def test_cast_date_columns_only_touches_listed_columns():
+    df = pl.DataFrame({"order_date": ["2024-08-22"], "status": ["success"]})
+
+    result = cast_date_columns(df, ["order_date"], "SRC01_sales_transactions.csv")
+
+    assert result.schema["order_date"] == pl.Date
+    assert result.schema["status"] == pl.String
+
+
+def test_cast_date_columns_logs_warning_when_null_ratio_above_50_percent(caplog):
+    df = pl.DataFrame({"order_date": ["not-a-date", "still-not-a-date", "2024-08-22"]})
+
+    with caplog.at_level(logging.WARNING):
+        cast_date_columns(df, ["order_date"], "SRC01_sales_transactions.csv")
+
+    assert "order_date" in caplog.text
+    assert "SRC01_sales_transactions.csv" in caplog.text
+
+
+def test_cast_date_columns_does_not_log_warning_when_null_ratio_normal(caplog):
+    df = pl.DataFrame({"order_date": ["2024-08-22", "2024-12-28", "2024-01-01"]})
+
+    with caplog.at_level(logging.WARNING):
+        cast_date_columns(df, ["order_date"], "SRC01_sales_transactions.csv")
+
+    assert caplog.text == ""
