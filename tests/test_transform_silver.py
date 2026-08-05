@@ -631,3 +631,33 @@ def test_run_silver_transform_records_error_message_for_failed_source(tmp_path):
     failed_record = next(r for r in records if r["source_file"] == failing_source)
     assert failed_record["status"] == "failed"
     assert failed_record["error"] is not None
+
+
+def test_run_silver_transform_is_idempotent_when_rerun_with_same_run_date(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+    silver_date_dir = silver_dir / "20260804"
+    first_run_counts = {
+        f: pl.read_parquet(silver_date_dir / f).height
+        for f in os.listdir(silver_date_dir)
+        if f.endswith(".parquet")
+    }
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+    second_run_counts = {
+        f: pl.read_parquet(silver_date_dir / f).height
+        for f in os.listdir(silver_date_dir)
+        if f.endswith(".parquet")
+    }
+
+    assert len(first_run_counts) == 10
+    assert first_run_counts == second_run_counts
