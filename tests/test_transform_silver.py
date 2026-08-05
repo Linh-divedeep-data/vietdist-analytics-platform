@@ -10,6 +10,7 @@ from src.transform_silver import (
     cast_date_columns,
     cast_money_and_qty_columns,
     drop_duplicate_rows,
+    drop_null_key_rows,
     standardize_text_columns,
     validate_required_columns,
 )
@@ -290,6 +291,72 @@ def test_drop_duplicate_rows_keeps_rows_that_differ_in_only_one_column():
     result = drop_duplicate_rows(df)
 
     assert result.shape[0] == 2
+
+
+def test_drop_null_key_rows_drops_row_with_null_in_single_key_column():
+    df = pl.DataFrame({"customer_id": ["CUS001", None, "CUS003"], "name": ["A", "B", "C"]})
+
+    result = drop_null_key_rows(df, ["customer_id"])
+
+    assert result["customer_id"].to_list() == ["CUS001", "CUS003"]
+
+
+def test_drop_null_key_rows_drops_row_with_null_in_any_of_multiple_key_columns():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS002", "CUS003"],
+            "product_id": ["PRD001", None, "PRD003"],
+        }
+    )
+
+    result = drop_null_key_rows(df, ["customer_id", "product_id"])
+
+    assert result["customer_id"].to_list() == ["CUS001", "CUS003"]
+    assert result["product_id"].to_list() == ["PRD001", "PRD003"]
+
+
+def test_drop_null_key_rows_keeps_rows_where_all_key_columns_non_null():
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS002"], "product_id": ["PRD001", "PRD002"]})
+
+    result = drop_null_key_rows(df, ["customer_id", "product_id"])
+
+    assert result.shape[0] == 2
+
+
+def test_drop_null_key_rows_ignores_null_in_unlisted_column():
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS002"], "notes": [None, "some note"]})
+
+    result = drop_null_key_rows(df, ["customer_id"])
+
+    assert result.shape[0] == 2
+    assert result["notes"].to_list() == [None, "some note"]
+
+
+def test_drop_null_key_rows_matches_parent_acceptance_criteria():
+    df = pl.DataFrame({"customer_id": ["CUS001", None, "CUS003"], "product_id": ["PRD001", "PRD002", None]})
+
+    result = drop_null_key_rows(df, ["customer_id", "product_id"])
+
+    assert result["customer_id"].null_count() == 0
+    assert result["product_id"].null_count() == 0
+
+
+def test_drop_null_key_rows_logs_count_of_dropped_rows(caplog):
+    df = pl.DataFrame({"customer_id": ["CUS001", None, "CUS003", None]})
+
+    with caplog.at_level(logging.INFO):
+        drop_null_key_rows(df, ["customer_id"])
+
+    assert "2" in caplog.text
+
+
+def test_drop_null_key_rows_does_not_log_when_no_rows_dropped(caplog):
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS002"]})
+
+    with caplog.at_level(logging.INFO):
+        drop_null_key_rows(df, ["customer_id"])
+
+    assert caplog.text == ""
 
 
 def test_drop_duplicate_rows_matches_parent_acceptance_criteria():
