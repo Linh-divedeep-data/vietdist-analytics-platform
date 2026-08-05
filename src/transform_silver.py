@@ -86,3 +86,8 @@ def drop_null_key_rows(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
         _logger.info("Loại %d dòng NULL ở cột khóa %s", dropped, columns)
 
     return result
+
+
+def fill_null_columns(df: pl.DataFrame, columns: list[str], value: str) -> pl.DataFrame:
+    """Fill NULL values in the given columns with a fixed value (e.g. customer_master.tax_code -> "UNKNOWN")."""
+    return df.with_columns(pl.col(col).fill_null(value) for col in columns)
