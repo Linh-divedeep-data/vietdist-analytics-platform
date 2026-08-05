@@ -3,6 +3,7 @@ import polars as pl
 from src.transform_gold import (
     add_surrogate_key,
     build_dim_customers,
+    build_dim_distributors,
     build_dim_products,
     dedupe_by_business_key,
     drop_lineage_columns,
@@ -134,3 +135,21 @@ def test_build_dim_products_generates_1_based_surrogate_key_and_dedupes_by_produ
     assert "_batch_id" not in result.columns
     kept_name = result.filter(pl.col("product_id") == "PRD0001")["product_name"].to_list()
     assert kept_name == ["Sữa tươi (bản gốc)"]
+
+
+def test_build_dim_distributors_generates_1_based_surrogate_key_and_dedupes_by_distributor_id():
+    df = pl.DataFrame(
+        {
+            "distributor_id": ["DIST0001", "DIST0001", "DIST0002"],
+            "distributor_name": ["Kho A (bản gốc)", "Kho A (bản trùng)", "Kho B"],
+            "_batch_id": ["batch-1", "batch-1", "batch-1"],
+        }
+    )
+
+    result = build_dim_distributors(df)
+
+    assert result.height == 2
+    assert result["distributor_key"].to_list() == [1, 2]
+    assert "_batch_id" not in result.columns
+    kept_name = result.filter(pl.col("distributor_id") == "DIST0001")["distributor_name"].to_list()
+    assert kept_name == ["Kho A (bản gốc)"]
