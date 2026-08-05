@@ -40,3 +40,10 @@ def build_dim_products(silver_df: pl.DataFrame) -> pl.DataFrame:
     result = drop_lineage_columns(silver_df)
     result = dedupe_by_business_key(result, "product_id")
     return add_surrogate_key(result, "product_key")
+
+
+def build_dim_distributors(silver_df: pl.DataFrame) -> pl.DataFrame:
+    """Build dim_distributors: drop lineage columns, dedupe by distributor_id, add distributor_key (1-based)."""
+    result = drop_lineage_columns(silver_df)
+    result = dedupe_by_business_key(result, "distributor_id")
+    return add_surrogate_key(result, "distributor_key")
