@@ -75,3 +75,8 @@ def standardize_text_columns(df: pl.DataFrame, columns: list[str]) -> pl.DataFra
 def drop_duplicate_rows(df: pl.DataFrame) -> pl.DataFrame:
     """Remove exact full-row duplicates (e.g. repeated rows in customer_master)."""
     return df.unique(maintain_order=True)
+
+
+def drop_null_key_rows(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+    """Drop rows where any of the given primary-key columns is NULL."""
+    return df.filter(pl.all_horizontal(pl.col(col).is_not_null() for col in columns))
