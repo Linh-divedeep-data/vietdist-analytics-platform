@@ -1,6 +1,76 @@
 import polars as pl
 
-from src.transform_gold import build_dim_customers, build_dim_products
+from src.transform_gold import (
+    add_surrogate_key,
+    build_dim_customers,
+    build_dim_products,
+    dedupe_by_business_key,
+    drop_lineage_columns,
+)
+
+
+def test_drop_lineage_columns_removes_all_5_lineage_columns():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS0001"],
+            "_source_file": ["SRC03_customer_master.csv"],
+            "_source_platform": ["gdrive"],
+            "_run_date": ["2026-08-04"],
+            "_ingested_at": ["2026-08-04T00:00:00"],
+            "_batch_id": ["batch-1"],
+        }
+    )
+
+    result = drop_lineage_columns(df)
+
+    assert result.columns == ["customer_id"]
+
+
+def test_drop_lineage_columns_is_noop_when_no_lineage_columns_present():
+    df = pl.DataFrame({"customer_id": ["CUS0001"]})
+
+    result = drop_lineage_columns(df)
+
+    assert result.columns == ["customer_id"]
+
+
+def test_add_surrogate_key_starts_at_1_not_0():
+    df = pl.DataFrame({"product_id": ["PRD0001", "PRD0002", "PRD0003"]})
+
+    result = add_surrogate_key(df, "product_key")
+
+    assert result["product_key"].to_list() == [1, 2, 3]
+    assert result.columns[0] == "product_key"
+
+
+def test_dedupe_by_business_key_keeps_first_row_and_logs_dropped_count(caplog):
+    import logging
+
+    df = pl.DataFrame(
+        {
+            "product_id": ["PRD0001", "PRD0001", "PRD0002"],
+            "product_name": ["gốc", "trùng", "khác"],
+        }
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = dedupe_by_business_key(df, "product_id")
+
+    assert result.height == 2
+    assert "product_id" in caplog.text
+    assert "1" in caplog.text
+
+
+def test_dedupe_by_business_key_does_not_log_when_no_duplicates(caplog):
+    import logging
+
+    df = pl.DataFrame({"product_id": ["PRD0001", "PRD0002"]})
+
+    with caplog.at_level(logging.WARNING):
+        result = dedupe_by_business_key(df, "product_id")
+
+    assert result.height == 2
+    assert caplog.text == ""
 
 
 def test_build_dim_customers_generates_1_based_surrogate_key():
