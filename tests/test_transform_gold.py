@@ -3,6 +3,7 @@ from datetime import date
 import polars as pl
 
 from src.transform_gold import (
+    add_is_current_flag,
     add_surrogate_key,
     build_dim_customers,
     build_dim_date,
@@ -195,3 +196,47 @@ def test_build_dim_date_column_order_matches_erd():
     result = build_dim_date(df)
 
     assert result.columns == ["date_key", "full_date", "year", "quarter", "month", "day"]
+
+
+def test_add_is_current_flag_true_when_valid_to_is_null():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "valid_from": [date(2024, 6, 1)],
+            "valid_to": [None],
+        }
+    )
+
+    result = add_is_current_flag(df)
+
+    assert result["is_current"].to_list() == [True]
+
+
+def test_add_is_current_flag_false_when_valid_to_is_a_future_version_date():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "valid_from": [date(2024, 1, 1)],
+            "valid_to": [date(2024, 6, 1)],
+        }
+    )
+
+    result = add_is_current_flag(df)
+
+    assert result["is_current"].to_list() == [False]
+
+
+def test_add_is_current_flag_false_for_last_version_of_resigned_employee():
+    # AC quan trọng nhất: nhân viên đã nghỉ (valid_to = resign_date, KHÔNG NULL)
+    # không được có version nào is_current=True.
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP002"],
+            "valid_from": [date(2024, 1, 1)],
+            "valid_to": [date(2024, 9, 30)],
+        }
+    )
+
+    result = add_is_current_flag(df)
+
+    assert result["is_current"].to_list() == [False]

@@ -67,3 +67,10 @@ def build_dim_date(sales_silver_df: pl.DataFrame) -> pl.DataFrame:
         )
         .select(["date_key", "full_date", "year", "quarter", "month", "day"])
     )
+
+
+def add_is_current_flag(df: pl.DataFrame) -> pl.DataFrame:
+    """Flag the current version per employee. valid_to is already coalesced with resign_date
+    (see add_scd2_valid_dates), so is_current only needs valid_to.is_null() — checking
+    resign_date separately would be a second source of truth for the same conclusion."""
+    return df.with_columns(pl.col("valid_to").is_null().alias("is_current"))
