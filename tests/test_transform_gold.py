@@ -1,8 +1,11 @@
+from datetime import date
+
 import polars as pl
 
 from src.transform_gold import (
     add_surrogate_key,
     build_dim_customers,
+    build_dim_date,
     build_dim_distributors,
     build_dim_products,
     dedupe_by_business_key,
@@ -153,3 +156,42 @@ def test_build_dim_distributors_generates_1_based_surrogate_key_and_dedupes_by_d
     assert "_batch_id" not in result.columns
     kept_name = result.filter(pl.col("distributor_id") == "DIST0001")["distributor_name"].to_list()
     assert kept_name == ["Kho A (bản gốc)"]
+
+
+def test_build_dim_date_covers_full_min_to_max_range_inclusive():
+    df = pl.DataFrame(
+        {"order_date": [date(2024, 1, 1), date(2024, 1, 3)]},
+    )
+
+    result = build_dim_date(df)
+
+    assert result.height == 3
+    assert result["full_date"].to_list() == [date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)]
+
+
+def test_build_dim_date_generates_yyyymmdd_integer_date_key():
+    df = pl.DataFrame({"order_date": [date(2024, 1, 1), date(2024, 1, 1)]})
+
+    result = build_dim_date(df)
+
+    assert result["date_key"].to_list() == [20240101]
+
+
+def test_build_dim_date_derives_year_quarter_month_day():
+    df = pl.DataFrame({"order_date": [date(2024, 3, 15), date(2024, 3, 15)]})
+
+    result = build_dim_date(df)
+
+    row = result.row(0, named=True)
+    assert row["year"] == 2024
+    assert row["quarter"] == 1
+    assert row["month"] == 3
+    assert row["day"] == 15
+
+
+def test_build_dim_date_column_order_matches_erd():
+    df = pl.DataFrame({"order_date": [date(2024, 1, 1), date(2024, 1, 1)]})
+
+    result = build_dim_date(df)
+
+    assert result.columns == ["date_key", "full_date", "year", "quarter", "month", "day"]
