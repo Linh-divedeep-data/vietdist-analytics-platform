@@ -67,3 +67,37 @@ mà không biết tại sao.
 | `fact_targets` | `(employee_id, year, month)` | 1 dòng = chỉ tiêu 1 nhân viên / 1 tháng |
 | `fact_returns` | `return_id` | 1 dòng = 1 lần trả hàng |
 | `fact_distributor_orders` | `(order_id, product_id)` | 1 dòng = 1 sản phẩm / 1 đơn đặt hàng NPP |
+
+## Bus Matrix — Business Process × Dimension
+
+**Ticket:** VDAP-393 (bd `vietdist-analytics-platform-a9l.9.2`)
+**Nguồn xác nhận:** cột FK thật trong `data/silver/20260804/{SRC01,SRC02,SRC05,SRC09}*.parquet`, đối chiếu khóa tự nhiên của 6 Dimension source (`SRC03,04,06,07,08,10`). Date dimension không có source riêng, derive từ cột ngày trên từng fact.
+
+### Ma trận
+
+| Process | Customer | Product | Employee | Date | Territory | Promotion | Distributor |
+|---|---|---|---|---|---|---|---|
+| fact_sales | X | X | X | X | X | | |
+| fact_targets | | | X | X | | | |
+| fact_returns | X | X | X | X | X | | |
+| fact_distributor_orders | | X | | X | | | X |
+
+### Giải thích từng process
+
+- **fact_sales:** có sẵn `customer_id`, `product_id`, `employee_id`, `order_date` → FK trực tiếp tới Customer, Product, Employee, Date. Có cả `employee_id` lẫn `customer_id` cùng lúc — đây đúng là cặp khóa tự nhiên của `territory_mapping` (`employee_id`+`customer_id`, có `effective_date`/`expiry_date`) → join được Territory dimension để tra cứu vùng phụ trách tại thời điểm bán. Không có `promotion_id` hay `distributor_id` trong nguồn → Promotion, Distributor để trống.
+- **fact_targets:** chỉ có `employee_id` + `year`/`month` (Date ở mức tháng) → Employee, Date có X. Không có `customer_id`/`product_id`/`distributor_id` → Customer/Product/Distributor trống. Vì `territory_mapping` cần cả `employee_id` VÀ `customer_id` mới xác định đúng 1 territory — nếu chỉ join bằng `employee_id` sẽ fan-out ra nhiều customer/territory của employee đó → Territory để trống, không đánh X.
+- **fact_returns:** có `customer_id`, `product_id`, `employee_id`, `return_date` — giống hệt pattern `fact_sales` → Customer, Product, Employee, Date, Territory đều X (lý do Territory giống fact_sales). Promotion, Distributor trống.
+- **fact_distributor_orders:** có `product_id`, `distributor_id`, `order_date` → Product, Date, Distributor có X. Không có `employee_id`/`customer_id` → Customer, Employee trống. Territory trống vì thiếu cả 2 cột khóa cần thiết (`employee_id` và `customer_id`) — territory_mapping vốn mô tả vùng phụ trách của nhân viên bán hàng với khách hàng, không áp dụng cho quan hệ nhà phân phối.
+
+### Conformed Dimensions (dùng ≥2 quy trình)
+
+- **Date** — dùng ở cả 4 process (mọi giao dịch đều có mốc thời gian).
+- **Product** — 3 process: fact_sales, fact_returns, fact_distributor_orders.
+- **Employee** — 3 process: fact_sales, fact_targets, fact_returns.
+- **Customer** — 2 process: fact_sales, fact_returns.
+- **Territory** — 2 process: fact_sales, fact_returns.
+
+### Không conformed / chưa xác định
+
+- **Distributor** — chỉ 1 process (fact_distributor_orders), không conformed.
+- **Promotion — ⚠️ gap cần design riêng:** không có process nào trong 4 fact hiện tại chứa cột `promotion_id` hay bất kỳ khóa cứng nào trỏ tới `promotion_program`. Nguồn `promotion_program` chỉ mô tả phạm vi áp dụng qua `target_channel`, `target_region`, `applicable_products`, `start_date`/`end_date` — đây là điều kiện business-rule (channel + region + date-range + product nằm trong danh sách), không phải 1 cột FK trực tiếp trên `fact_sales`. Vì AC ticket này yêu cầu "không đoán", KHÔNG đánh X cho Promotion ở bus matrix hiện tại. Việc thiết kế join Promotion (dạng bridge table hay business-rule join) cần 1 quyết định thiết kế riêng, ngoài scope VDAP-393 — nên xử lý ở subtask kế tiếp trước khi build Gold layer thật.
