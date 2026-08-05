@@ -75,3 +75,8 @@ def standardize_text_columns(df: pl.DataFrame, columns: list[str]) -> pl.DataFra
 def drop_duplicate_rows(df: pl.DataFrame) -> pl.DataFrame:
     """Remove exact full-row duplicates (e.g. repeated rows in customer_master)."""
     return df.unique(maintain_order=True)
+
+
+def fill_null_columns(df: pl.DataFrame, columns: list[str], value: str) -> pl.DataFrame:
+    """Fill NULL values in the given columns with a fixed value (e.g. customer_master.tax_code -> "UNKNOWN")."""
+    return df.with_columns(pl.col(col).fill_null(value) for col in columns)

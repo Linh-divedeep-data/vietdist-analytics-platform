@@ -10,6 +10,7 @@ from src.transform_silver import (
     cast_date_columns,
     cast_money_and_qty_columns,
     drop_duplicate_rows,
+    fill_null_columns,
     standardize_text_columns,
     validate_required_columns,
 )
@@ -298,3 +299,36 @@ def test_drop_duplicate_rows_matches_parent_acceptance_criteria():
     result = drop_duplicate_rows(df)
 
     assert result.shape[0] == result.unique().shape[0]
+
+
+def test_fill_null_columns_fills_null_in_single_column_with_given_value():
+    df = pl.DataFrame({"tax_code": ["TAX001", None, "TAX003"]})
+
+    result = fill_null_columns(df, ["tax_code"], "UNKNOWN")
+
+    assert result["tax_code"].to_list() == ["TAX001", "UNKNOWN", "TAX003"]
+
+
+def test_fill_null_columns_only_touches_listed_columns():
+    df = pl.DataFrame({"tax_code": [None], "notes": [None]})
+
+    result = fill_null_columns(df, ["tax_code"], "UNKNOWN")
+
+    assert result["tax_code"].to_list() == ["UNKNOWN"]
+    assert result["notes"].to_list() == [None]
+
+
+def test_fill_null_columns_is_idempotent_when_no_null_present():
+    df = pl.DataFrame({"tax_code": ["TAX001", "TAX002"]})
+
+    result = fill_null_columns(df, ["tax_code"], "UNKNOWN")
+
+    assert result["tax_code"].to_list() == ["TAX001", "TAX002"]
+
+
+def test_fill_null_columns_matches_parent_acceptance_criteria():
+    df = pl.DataFrame({"tax_code": ["TAX001", None, None, "TAX004"]})
+
+    result = fill_null_columns(df, ["tax_code"], "UNKNOWN")
+
+    assert result.filter(pl.col("tax_code").is_null()).shape[0] == 0
