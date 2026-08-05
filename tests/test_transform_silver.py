@@ -341,6 +341,24 @@ def test_drop_null_key_rows_matches_parent_acceptance_criteria():
     assert result["product_id"].null_count() == 0
 
 
+def test_drop_null_key_rows_logs_count_of_dropped_rows(caplog):
+    df = pl.DataFrame({"customer_id": ["CUS001", None, "CUS003", None]})
+
+    with caplog.at_level(logging.INFO):
+        drop_null_key_rows(df, ["customer_id"])
+
+    assert "2" in caplog.text
+
+
+def test_drop_null_key_rows_does_not_log_when_no_rows_dropped(caplog):
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS002"]})
+
+    with caplog.at_level(logging.INFO):
+        drop_null_key_rows(df, ["customer_id"])
+
+    assert caplog.text == ""
+
+
 def test_drop_duplicate_rows_matches_parent_acceptance_criteria():
     df = pl.DataFrame({"customer_id": ["CUS001", "CUS001", "CUS001"], "name": ["A", "A", "A"]})
 

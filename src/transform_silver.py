@@ -78,5 +78,11 @@ def drop_duplicate_rows(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def drop_null_key_rows(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
-    """Drop rows where any of the given primary-key columns is NULL."""
-    return df.filter(pl.all_horizontal(pl.col(col).is_not_null() for col in columns))
+    """Drop rows where any of the given primary-key columns is NULL, logging the dropped row count."""
+    result = df.filter(pl.all_horizontal(pl.col(col).is_not_null() for col in columns))
+
+    dropped = df.height - result.height
+    if dropped > 0:
+        _logger.info("Loại %d dòng NULL ở cột khóa %s", dropped, columns)
+
+    return result
