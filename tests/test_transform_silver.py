@@ -5,7 +5,13 @@ from datetime import date
 import polars as pl
 import pytest
 
-from config.sources import REQUIRED_COLUMNS
+from config.sources import (
+    CSV_SOURCES,
+    DATE_COLUMNS,
+    EXCEL_SOURCES,
+    MONEY_QTY_COLUMNS,
+    REQUIRED_COLUMNS,
+)
 from src.extract.parser import SchemaMismatchError
 from src.transform_silver import (
     cast_date_columns,
@@ -14,6 +20,7 @@ from src.transform_silver import (
     drop_null_key_rows,
     fill_null_columns,
     get_silver_output_dir,
+    run_silver_transform,
     standardize_text_columns,
     transform_source,
     validate_required_columns,
@@ -548,3 +555,79 @@ def test_transform_source_handles_source_with_no_money_qty_columns():
 
     assert result.schema["join_date"] == pl.Date
     assert result["position"].to_list() == ["STAFF"]
+
+
+def _minimal_valid_bronze_fixture(source_file, *, drop_column=None):
+    """Build a 1-row DataFrame satisfying REQUIRED_COLUMNS[source_file], with
+    role-appropriate placeholder values so transform_source() doesn't raise."""
+    columns = [c for c in REQUIRED_COLUMNS[source_file] if c != drop_column]
+    row = {}
+    for col in columns:
+        if col in MONEY_QTY_COLUMNS.get(source_file, []):
+            row[col] = "100"
+        elif col in DATE_COLUMNS.get(source_file, []):
+            row[col] = "2024-01-01"
+        else:
+            row[col] = "x"
+    return pl.DataFrame({col: [val] for col, val in row.items()})
+
+
+def test_run_silver_transform_writes_ten_files_for_all_valid_sources(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
+    assert len(written) == 10
+    assert len(records) == 10
+    assert all(r["status"] == "success" for r in records)
+
+
+def test_run_silver_transform_continues_after_one_source_fails(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    failing_source = "SRC04_product_master.xlsx"
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        drop_column = "product_id" if source_file == failing_source else None
+        df = _minimal_valid_bronze_fixture(source_file, drop_column=drop_column)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
+    assert len(written) == 9  # the 9 valid sources still got written
+
+    statuses = {r["source_file"]: r["status"] for r in records}
+    assert statuses[failing_source] == "failed"
+    assert sum(1 for s in statuses.values() if s == "success") == 9
+
+
+def test_run_silver_transform_records_error_message_for_failed_source(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    failing_source = "SRC04_product_master.xlsx"
+    df = _minimal_valid_bronze_fixture(failing_source, drop_column="product_id")
+    df.write_parquet(bronze_date_dir / "SRC04_product_master.parquet")
+
+    records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    failed_record = next(r for r in records if r["source_file"] == failing_source)
+    assert failed_record["status"] == "failed"
+    assert failed_record["error"] is not None

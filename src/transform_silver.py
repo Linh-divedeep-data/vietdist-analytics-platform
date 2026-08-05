@@ -11,10 +11,12 @@ import os
 
 import polars as pl
 
-from config.settings import SILVER_DIR
+from config.settings import BRONZE_DIR, SILVER_DIR
 from config.sources import (
+    CSV_SOURCES,
     DATE_COLUMNS,
     DATE_FORMAT_BY_SOURCE,
+    EXCEL_SOURCES,
     KEY_COLUMNS,
     MONEY_QTY_COLUMNS,
     TEXT_COLUMNS,
@@ -129,3 +131,28 @@ def transform_source(df: pl.DataFrame, source_file: str) -> pl.DataFrame:
         result = fill_null_columns(result, ["tax_code"], "UNKNOWN")
 
     return result
+
+
+def run_silver_transform(
+    run_date: str, bronze_dir: str = BRONZE_DIR, silver_dir: str = SILVER_DIR
+) -> list[dict]:
+    """Run every canonical source through transform_source(), writing Silver Parquet.
+    One failing source is logged and skipped, not fatal to the batch."""
+    bronze_date_dir = os.path.join(bronze_dir, run_date.replace("-", ""))
+    out_dir = get_silver_output_dir(run_date, silver_dir)
+
+    records = []
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        record = {"source_file": source_file, "status": "success", "error": None}
+        try:
+            df = pl.read_parquet(os.path.join(bronze_date_dir, f"{source_name}.parquet"))
+            result = transform_source(df, source_file)
+            write_silver_parquet(result, source_name, out_dir)
+        except Exception as error:  # noqa: BLE001 -- deliberately broad: any error type must not crash the rest of the batch (VDAP-328 AC)
+            record["status"] = "failed"
+            record["error"] = str(error)
+            _logger.error("%s: lỗi khi transform Silver — %s", source_file, error)
+        records.append(record)
+
+    return records
