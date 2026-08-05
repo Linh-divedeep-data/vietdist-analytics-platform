@@ -14,12 +14,14 @@ from datetime import UTC, datetime
 
 from src.extract.orchestrator import run_bronze_ingestion
 from src.logger import get_logger
+from src.transform_silver import run_silver_transform
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    """Parse CLI args, currently just the required --layer flag."""
+    """Parse CLI args: required --layer, optional --run-date (defaults to today)."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--layer", choices=["bronze"], required=True)
+    parser.add_argument("--layer", choices=["bronze", "silver"], required=True)
+    parser.add_argument("--run-date", required=False, default=None)
     return parser.parse_args(argv)
 
 
@@ -46,11 +48,13 @@ def main(argv: list[str] | None = None) -> int:
     """Parse CLI args, run the pipeline once with a fresh batch_id, and return the process exit code."""
     args = _parse_args(argv)
     batch_id = str(uuid.uuid4())
-    run_date = datetime.now(UTC).date().isoformat()
+    run_date = args.run_date or datetime.now(UTC).date().isoformat()
     logger = get_logger(batch_id)
     logger.info("pipeline run started")
     if args.layer == "bronze":
         records = run_bronze_ingestion(run_date, batch_id)
+    elif args.layer == "silver":
+        records = run_silver_transform(run_date)
     exit_code = _check_layer_results(records, layer_name=args.layer, batch_id=batch_id)
     logger.info("pipeline run finished")
     return exit_code

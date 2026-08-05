@@ -97,10 +97,67 @@ def test_missing_layer_argument_errors(capsys):
 
 def test_invalid_layer_choice_errors(capsys):
     with pytest.raises(SystemExit) as exc_info:
-        main(["--layer", "silver"])
+        main(["--layer", "gold"])
 
     assert exc_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_silver_layer_calls_run_silver_transform_with_run_date(monkeypatch):
+    captured = {}
+
+    def fake_run_silver_transform(run_date):
+        captured["run_date"] = run_date
+        return [{"source_file": "SRC01_sales_transactions.csv", "status": "success"}]
+
+    monkeypatch.setattr("main.run_silver_transform", fake_run_silver_transform)
+
+    exit_code = main(["--layer", "silver"])
+
+    assert exit_code == 0
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", captured["run_date"])
+
+
+def test_silver_layer_returns_1_when_run_silver_transform_reports_failure(monkeypatch):
+    monkeypatch.setattr(
+        "main.run_silver_transform",
+        lambda run_date: [
+            {"source_file": "SRC01_sales_transactions.csv", "status": "success"},
+            {"source_file": "SRC04_product_master.xlsx", "status": "failed"},
+        ],
+    )
+
+    exit_code = main(["--layer", "silver"])
+
+    assert exit_code == 1
+
+
+def test_explicit_run_date_is_passed_through_to_silver_transform(monkeypatch):
+    captured = {}
+
+    def fake_run_silver_transform(run_date):
+        captured["run_date"] = run_date
+        return [{"source_file": "SRC01_sales_transactions.csv", "status": "success"}]
+
+    monkeypatch.setattr("main.run_silver_transform", fake_run_silver_transform)
+
+    main(["--layer", "silver", "--run-date", "2026-08-04"])
+
+    assert captured["run_date"] == "2026-08-04"
+
+
+def test_bronze_layer_without_run_date_still_defaults_to_today(monkeypatch):
+    captured = {}
+
+    def fake_run_bronze_ingestion(run_date, batch_id):
+        captured["run_date"] = run_date
+        return [{"source": "src01", "status": "success"}]
+
+    monkeypatch.setattr("main.run_bronze_ingestion", fake_run_bronze_ingestion)
+
+    main(["--layer", "bronze"])
+
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", captured["run_date"])
 
 
 def test_check_layer_results_returns_1_and_logs_error_on_any_failure(capsys):
