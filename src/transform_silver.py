@@ -12,7 +12,13 @@ import os
 import polars as pl
 
 from config.settings import SILVER_DIR
-from config.sources import DATE_FORMAT_BY_SOURCE
+from config.sources import (
+    DATE_COLUMNS,
+    DATE_FORMAT_BY_SOURCE,
+    KEY_COLUMNS,
+    MONEY_QTY_COLUMNS,
+    TEXT_COLUMNS,
+)
 from src.extract.parser import SchemaMismatchError, validate_schema
 
 _logger = logging.getLogger(__name__)
@@ -107,3 +113,19 @@ def write_silver_parquet(df: pl.DataFrame, source_name: str, out_dir: str) -> st
     path = os.path.join(out_dir, f"{source_name}.parquet")
     df.write_parquet(path)
     return path
+
+
+def transform_source(df: pl.DataFrame, source_file: str) -> pl.DataFrame:
+    """Run one source through the full 6-step Silver cleaning pipeline."""
+    validate_required_columns(df, source_file)
+
+    result = cast_money_and_qty_columns(df, MONEY_QTY_COLUMNS[source_file])
+    result = cast_date_columns(result, DATE_COLUMNS[source_file], source_file)
+    result = standardize_text_columns(result, TEXT_COLUMNS[source_file])
+    result = drop_duplicate_rows(result)
+    result = drop_null_key_rows(result, KEY_COLUMNS[source_file])
+
+    if source_file == "SRC03_customer_master.csv":
+        result = fill_null_columns(result, ["tax_code"], "UNKNOWN")
+
+    return result
