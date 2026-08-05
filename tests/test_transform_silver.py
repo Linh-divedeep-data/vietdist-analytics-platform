@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import date
 
 import polars as pl
@@ -12,8 +13,10 @@ from src.transform_silver import (
     drop_duplicate_rows,
     drop_null_key_rows,
     fill_null_columns,
+    get_silver_output_dir,
     standardize_text_columns,
     validate_required_columns,
+    write_silver_parquet,
 )
 
 
@@ -399,3 +402,49 @@ def test_fill_null_columns_matches_parent_acceptance_criteria():
     result = fill_null_columns(df, ["tax_code"], "UNKNOWN")
 
     assert result.filter(pl.col("tax_code").is_null()).shape[0] == 0
+
+
+def test_get_silver_output_dir_strips_dashes_from_run_date(tmp_path):
+    out_dir = get_silver_output_dir("2026-07-22", silver_dir=str(tmp_path))
+
+    assert out_dir == os.path.join(str(tmp_path), "20260722")
+
+
+def test_get_silver_output_dir_creates_directory_on_disk(tmp_path):
+    out_dir = get_silver_output_dir("2026-07-22", silver_dir=str(tmp_path))
+
+    assert os.path.isdir(out_dir)
+
+
+def test_get_silver_output_dir_does_not_raise_when_directory_already_exists(tmp_path):
+    get_silver_output_dir("2026-07-22", silver_dir=str(tmp_path))
+
+    # must not raise on the second call even though the directory already exists
+    get_silver_output_dir("2026-07-22", silver_dir=str(tmp_path))
+
+
+def test_write_silver_parquet_creates_file_named_after_source(tmp_path):
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS002"]})
+
+    path = write_silver_parquet(df, "SRC03_customer_master", str(tmp_path))
+
+    assert path == os.path.join(str(tmp_path), "SRC03_customer_master.parquet")
+    assert os.path.exists(path)
+
+
+def test_write_silver_parquet_row_count_matches(tmp_path):
+    df = pl.DataFrame({"customer_id": ["CUS001", "CUS002", "CUS003"]})
+
+    path = write_silver_parquet(df, "SRC03_customer_master", str(tmp_path))
+
+    assert pl.read_parquet(path).height == 3
+
+
+def test_write_silver_parquet_ten_sources_produce_ten_files_in_same_dir(tmp_path):
+    source_names = [f"SRC0{i}_source" if i < 10 else f"SRC{i}_source" for i in range(1, 11)]
+    for name in source_names:
+        write_silver_parquet(pl.DataFrame({"x": [1]}), name, str(tmp_path))
+
+    written = os.listdir(tmp_path)
+    assert len(written) == 10
+    assert set(written) == {f"{name}.parquet" for name in source_names}

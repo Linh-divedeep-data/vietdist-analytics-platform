@@ -7,9 +7,11 @@ silently mis-mapping a renamed/dropped column.
 """
 
 import logging
+import os
 
 import polars as pl
 
+from config.settings import SILVER_DIR
 from config.sources import DATE_FORMAT_BY_SOURCE
 from src.extract.parser import SchemaMismatchError, validate_schema
 
@@ -91,3 +93,17 @@ def drop_null_key_rows(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
 def fill_null_columns(df: pl.DataFrame, columns: list[str], value: str) -> pl.DataFrame:
     """Fill NULL values in the given columns with a fixed value (e.g. customer_master.tax_code -> "UNKNOWN")."""
     return df.with_columns(pl.col(col).fill_null(value) for col in columns)
+
+
+def get_silver_output_dir(run_date: str, silver_dir: str = SILVER_DIR) -> str:
+    """Return (creating if needed) the Silver output directory for a run_date."""
+    out_dir = os.path.join(silver_dir, run_date.replace("-", ""))
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def write_silver_parquet(df: pl.DataFrame, source_name: str, out_dir: str) -> str:
+    """Write a cleaned Silver DataFrame to out_dir/<source_name>.parquet."""
+    path = os.path.join(out_dir, f"{source_name}.parquet")
+    df.write_parquet(path)
+    return path
