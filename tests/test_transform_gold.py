@@ -3,6 +3,7 @@ from datetime import date
 import polars as pl
 
 from src.transform_gold import (
+    add_scd2_valid_dates,
     add_surrogate_key,
     build_dim_customers,
     build_dim_date,
@@ -195,3 +196,44 @@ def test_build_dim_date_column_order_matches_erd():
     result = build_dim_date(df)
 
     assert result.columns == ["date_key", "full_date", "year", "quarter", "month", "day"]
+
+
+def test_add_scd2_valid_dates_covers_middle_resigned_and_active_last_versions():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001", "EMP001", "EMP002"],
+            "version": ["v1", "v2", "v1"],
+            "effective_date": [date(2024, 1, 1), date(2024, 6, 1), date(2024, 1, 1)],
+            "resign_date": [None, None, date(2024, 9, 30)],
+        }
+    )
+
+    result = add_scd2_valid_dates(df)
+
+    rows = {(r["employee_id"], r["version"]): r for r in result.to_dicts()}
+    # EMP001 v1: không phải version cuối -> valid_to = effective_date của v2
+    assert rows[("EMP001", "v1")]["valid_from"] == date(2024, 1, 1)
+    assert rows[("EMP001", "v1")]["valid_to"] == date(2024, 6, 1)
+    # EMP001 v2: version cuối, đang làm (resign_date NULL) -> valid_to = NULL
+    assert rows[("EMP001", "v2")]["valid_from"] == date(2024, 6, 1)
+    assert rows[("EMP001", "v2")]["valid_to"] is None
+    # EMP002 v1: version cuối, đã nghỉ -> valid_to = resign_date
+    assert rows[("EMP002", "v1")]["valid_from"] == date(2024, 1, 1)
+    assert rows[("EMP002", "v1")]["valid_to"] == date(2024, 9, 30)
+
+
+def test_add_scd2_valid_dates_sorts_input_regardless_of_row_order():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001", "EMP001"],
+            "version": ["v2", "v1"],
+            "effective_date": [date(2024, 6, 1), date(2024, 1, 1)],
+            "resign_date": [None, None],
+        }
+    )
+
+    result = add_scd2_valid_dates(df)
+
+    rows = {r["version"]: r for r in result.to_dicts()}
+    assert rows["v1"]["valid_to"] == date(2024, 6, 1)
+    assert rows["v2"]["valid_to"] is None
