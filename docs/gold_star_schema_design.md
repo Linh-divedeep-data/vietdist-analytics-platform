@@ -1,4 +1,24 @@
-# 🌟 VietDist Gold Layer: Star Schema Design (Kimball) — Grain Statements
+# 🌟 VietDist Gold Layer: Star Schema Design (Kimball)
+
+## Giới thiệu
+
+Tài liệu này là nguồn tham chiếu chuẩn duy nhất cho thiết kế Gold layer
+(Star Schema theo phương pháp Kimball) của VietDist — dùng khi code
+Phase 3 (P3.1-P3.5): khởi tạo Dimension/Fact table, viết Data Mart, và
+build ERD thật trong Power BI. Toàn bộ số liệu trong 3 phần dưới đây đều
+xác nhận trực tiếp bằng Polars trên `data/silver/20260804/*.parquet` —
+không đoán, không giả định.
+
+Tài liệu gồm 3 phần theo đúng thứ tự xây dựng thiết kế:
+
+1. [Grain Statements](#grain-statements) — "1 dòng nghĩa là gì" cho từng
+   Fact table, xác nhận bằng business key thật.
+2. [Bus Matrix — Business Process × Dimension](#bus-matrix--business-process--dimension) —
+   4 quy trình nghiệp vụ dùng chung Dimension nào (conformed dimension).
+3. [ERD — Star Schema (Mermaid)](#erd--star-schema-mermaid) — sơ đồ quan
+   hệ Fact-Dim trực quan, khớp đúng Bus Matrix.
+
+## Grain Statements
 
 **Ticket:** VDAP-392 (bd `vietdist-analytics-platform-a9l.9.1`)
 **Nguồn dữ liệu xác nhận:** `data/silver/20260804/*.parquet` (đọc trực tiếp bằng Polars, không đoán)
