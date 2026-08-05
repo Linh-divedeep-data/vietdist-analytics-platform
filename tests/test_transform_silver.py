@@ -15,6 +15,7 @@ from src.transform_silver import (
     fill_null_columns,
     get_silver_output_dir,
     standardize_text_columns,
+    transform_source,
     validate_required_columns,
     write_silver_parquet,
 )
@@ -448,3 +449,102 @@ def test_write_silver_parquet_ten_sources_produce_ten_files_in_same_dir(tmp_path
     written = os.listdir(tmp_path)
     assert len(written) == 10
     assert set(written) == {f"{name}.parquet" for name in source_names}
+
+
+def test_transform_source_casts_and_cleans_src01_shaped_fixture():
+    df = pl.DataFrame(
+        {
+            "order_id": ["ORD001", "ORD001", "ORD002"],
+            "order_date": ["2024-08-22", "2024-08-22", "2024-08-23"],
+            "order_month": ["8", "8", "8"],
+            "order_quarter": ["3", "3", "3"],
+            "order_year": ["2024", "2024", "2024"],
+            "customer_id": ["CUS001", "CUS001", "CUS002"],
+            "region": [" mien nam ", " mien nam ", "mien bac"],
+            "province": ["TP.HCM", "TP.HCM", "Ha Noi"],
+            "channel": ["Modern Trade", "Modern Trade", "Traditional Trade"],
+            "employee_id": ["EMP001", "EMP001", "EMP002"],
+            "product_id": ["PRD001", "PRD001", "PRD002"],
+            "product_category": ["Thuc pham", "Thuc pham", "Do uong"],
+            "quantity": ["10", "10", "5"],
+            "unit_price": ["1,000", "1,000", "2,000"],
+            "discount_pct": ["0", "0", "0"],
+            "discount_amount": ["0", "0", "0"],
+            "gross_amount": ["10,000", "10,000", "10,000"],
+            "net_amount": ["10,000", "10,000", "10,000"],
+            "delivery_status": ["Delivered", "Delivered", "Delivered"],
+            "payment_method": ["Cash", "Cash", "Cash"],
+            "payment_status": ["Paid", "Paid", "Paid"],
+        }
+    )
+
+    result = transform_source(df, "SRC01_sales_transactions.csv")
+
+    assert result.schema["net_amount"] == pl.Float64
+    assert result.schema["order_date"] == pl.Date
+    assert result["region"].to_list() == ["MIEN NAM", "MIEN BAC"]
+    assert result.shape[0] == 2  # exact duplicate row removed
+
+
+def test_transform_source_fills_tax_code_for_customer_master():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS002"],
+            "customer_name": ["Nguyen Van A", "Tran Thi B"],
+            "customer_type": ["retail", "wholesale"],
+            "channel": ["Modern Trade", "Traditional Trade"],
+            "province": ["TP.HCM", "Ha Noi"],
+            "region": ["mien nam", "mien bac"],
+            "address": ["123 Le Loi", "456 Tran Phu"],
+            "phone": ["0900000001", "0900000002"],
+            "tax_code": [None, "TAX002"],
+            "join_date": ["2020-01-01", "2020-02-01"],
+            "credit_limit": ["1,000,000", "2,000,000"],
+            "status": ["active", "active"],
+        }
+    )
+
+    result = transform_source(df, "SRC03_customer_master.csv")
+
+    assert result["tax_code"].to_list() == ["UNKNOWN", "TAX002"]
+
+
+def test_transform_source_does_not_apply_tax_code_fill_to_other_sources():
+    df = pl.DataFrame({col: ["x"] for col in REQUIRED_COLUMNS["SRC04_product_master.xlsx"]})
+    df = df.with_columns(
+        pl.lit("1000").alias("unit_price"),
+        pl.lit("1000").alias("cost_price"),
+        pl.lit("100").alias("weight_gram"),
+        pl.lit("2024-01-01").alias("launch_date"),
+    )
+
+    result = transform_source(df, "SRC04_product_master.xlsx")
+
+    assert "tax_code" not in result.columns
+
+
+def test_transform_source_handles_source_with_no_money_qty_columns():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "full_name": ["Nguyen Van A"],
+            "gender": ["male"],
+            "date_of_birth": ["1990-01-01"],
+            "join_date": ["2020-01-01"],
+            "position": ["staff"],
+            "region": ["mien nam"],
+            "team": ["sales"],
+            "email": ["a@example.com"],
+            "phone": ["0900000001"],
+            "status": ["active"],
+            "version": ["1"],
+            "effective_date": ["2020-01-01"],
+            "resign_date": pl.Series([None], dtype=pl.String),
+            "transfer_note": pl.Series([None], dtype=pl.String),
+        }
+    )
+
+    result = transform_source(df, "SRC07_employee_master.xlsx")  # must not raise
+
+    assert result.schema["join_date"] == pl.Date
+    assert result["position"].to_list() == ["STAFF"]
