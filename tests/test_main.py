@@ -19,8 +19,44 @@ def _reset_shared_logger():
     logger.handlers.clear()
 
 
-def test_all_log_lines_share_one_batch_id(capsys):
-    exit_code = main()
+def test_bronze_layer_calls_run_bronze_ingestion_with_run_date_and_batch_id(monkeypatch):
+    captured = {}
+
+    def fake_run_bronze_ingestion(run_date, batch_id):
+        captured["run_date"] = run_date
+        captured["batch_id"] = batch_id
+        return [{"source": "src01", "status": "success"}]
+
+    monkeypatch.setattr("main.run_bronze_ingestion", fake_run_bronze_ingestion)
+
+    exit_code = main(["--layer", "bronze"])
+
+    assert exit_code == 0
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", captured["run_date"])
+    assert captured["batch_id"]
+
+
+def test_bronze_layer_returns_1_when_run_bronze_ingestion_reports_failure(monkeypatch):
+    monkeypatch.setattr(
+        "main.run_bronze_ingestion",
+        lambda run_date, batch_id: [
+            {"source": "src01", "status": "success"},
+            {"source": "src02", "status": "failed"},
+        ],
+    )
+
+    exit_code = main(["--layer", "bronze"])
+
+    assert exit_code == 1
+
+
+def test_all_log_lines_share_one_batch_id(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "main.run_bronze_ingestion",
+        lambda run_date, batch_id: [{"source": "src01", "status": "success"}],
+    )
+
+    exit_code = main(["--layer", "bronze"])
 
     lines = capsys.readouterr().err.strip().splitlines()
     assert len(lines) >= 2
@@ -35,16 +71,93 @@ def test_all_log_lines_share_one_batch_id(capsys):
     assert exit_code == 0
 
 
-def test_different_runs_get_different_batch_ids(capsys):
-    main()
-    first_run_lines = capsys.readouterr().err.strip().splitlines()
-    first_batch_id = LOG_LINE_RE.match(first_run_lines[0]).group("batch_id")
+def test_different_runs_get_different_batch_ids(monkeypatch):
+    seen_batch_ids = []
 
-    main()
-    second_run_lines = capsys.readouterr().err.strip().splitlines()
-    second_batch_id = LOG_LINE_RE.match(second_run_lines[0]).group("batch_id")
+    def fake_run_bronze_ingestion(run_date, batch_id):
+        seen_batch_ids.append(batch_id)
+        return [{"source": "src01", "status": "success"}]
 
-    assert first_batch_id != second_batch_id
+    monkeypatch.setattr("main.run_bronze_ingestion", fake_run_bronze_ingestion)
+
+    main(["--layer", "bronze"])
+    main(["--layer", "bronze"])
+
+    assert len(seen_batch_ids) == 2
+    assert seen_batch_ids[0] != seen_batch_ids[1]
+
+
+def test_missing_layer_argument_errors(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main([])
+
+    assert exc_info.value.code == 2
+    assert "--layer" in capsys.readouterr().err
+
+
+def test_invalid_layer_choice_errors(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--layer", "gold"])
+
+    assert exc_info.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_silver_layer_calls_run_silver_transform_with_run_date(monkeypatch):
+    captured = {}
+
+    def fake_run_silver_transform(run_date):
+        captured["run_date"] = run_date
+        return [{"source_file": "SRC01_sales_transactions.csv", "status": "success"}]
+
+    monkeypatch.setattr("main.run_silver_transform", fake_run_silver_transform)
+
+    exit_code = main(["--layer", "silver"])
+
+    assert exit_code == 0
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", captured["run_date"])
+
+
+def test_silver_layer_returns_1_when_run_silver_transform_reports_failure(monkeypatch):
+    monkeypatch.setattr(
+        "main.run_silver_transform",
+        lambda run_date: [
+            {"source_file": "SRC01_sales_transactions.csv", "status": "success"},
+            {"source_file": "SRC04_product_master.xlsx", "status": "failed"},
+        ],
+    )
+
+    exit_code = main(["--layer", "silver"])
+
+    assert exit_code == 1
+
+
+def test_explicit_run_date_is_passed_through_to_silver_transform(monkeypatch):
+    captured = {}
+
+    def fake_run_silver_transform(run_date):
+        captured["run_date"] = run_date
+        return [{"source_file": "SRC01_sales_transactions.csv", "status": "success"}]
+
+    monkeypatch.setattr("main.run_silver_transform", fake_run_silver_transform)
+
+    main(["--layer", "silver", "--run-date", "2026-08-04"])
+
+    assert captured["run_date"] == "2026-08-04"
+
+
+def test_bronze_layer_without_run_date_still_defaults_to_today(monkeypatch):
+    captured = {}
+
+    def fake_run_bronze_ingestion(run_date, batch_id):
+        captured["run_date"] = run_date
+        return [{"source": "src01", "status": "success"}]
+
+    monkeypatch.setattr("main.run_bronze_ingestion", fake_run_bronze_ingestion)
+
+    main(["--layer", "bronze"])
+
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", captured["run_date"])
 
 
 def test_check_layer_results_returns_1_and_logs_error_on_any_failure(capsys):

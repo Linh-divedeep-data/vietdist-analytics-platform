@@ -15,6 +15,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
+from config.constants import GDRIVE_BACKOFF_SECONDS, GDRIVE_MAX_ATTEMPTS
+
 load_dotenv()
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -22,6 +24,7 @@ SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "credentials.jso
 
 
 def get_drive_service():
+    """Build a fresh Drive API client from the local service-account credentials file."""
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
         raise FileNotFoundError(
             f"Không tìm thấy file {SERVICE_ACCOUNT_FILE}. Đặt file ở thư mục gốc dự án "
@@ -32,6 +35,7 @@ def get_drive_service():
 
 
 def list_files_in_folder(folder_id: str) -> list[dict]:
+    """List every file in a Drive folder, paginating past the 100-file page limit."""
     service = get_drive_service()
     query = f"'{folder_id}' in parents and trashed=false"
 
@@ -52,6 +56,7 @@ def list_files_in_folder(folder_id: str) -> list[dict]:
 
 
 def get_folder_id_from_env() -> str:
+    """Read GDRIVE_FOLDER_ID from the environment, raising if it's unset."""
     folder_id = os.getenv("GDRIVE_FOLDER_ID")
     if not folder_id:
         raise RuntimeError(
@@ -60,13 +65,14 @@ def get_folder_id_from_env() -> str:
     return folder_id
 
 
-_MAX_ATTEMPTS = 3
+_MAX_ATTEMPTS = GDRIVE_MAX_ATTEMPTS
 _RETRYABLE_STATUS_CODES = {429, 500, 503}
-_BACKOFF_SECONDS = (1, 2, 4)
+_BACKOFF_SECONDS = GDRIVE_BACKOFF_SECONDS
 _sleep = time.sleep
 
 
 def _download_attempt(file_id: str, destination_path: str) -> None:
+    """Download one Drive file to disk in a single attempt, with no retry."""
     service = get_drive_service()
     request = service.files().get_media(fileId=file_id)
     with io.FileIO(destination_path, "wb") as fh:
@@ -77,11 +83,13 @@ def _download_attempt(file_id: str, destination_path: str) -> None:
 
 
 def _cleanup_partial_file(path: str) -> None:
+    """Remove a partially-downloaded file left behind by a failed attempt, if present."""
     if os.path.exists(path):
         os.remove(path)
 
 
 def download_file(file_id: str, file_name: str, destination_folder: str = "data/raw") -> str:
+    """Download a Drive file to destination_folder, retrying transient errors with backoff."""
     os.makedirs(destination_folder, exist_ok=True)
     destination_path = os.path.join(destination_folder, file_name)
 

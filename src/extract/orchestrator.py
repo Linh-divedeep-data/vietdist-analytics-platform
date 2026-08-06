@@ -1,1 +1,39 @@
 """run_bronze_ingestion(): main loop over registry.UNIT_OF_WORK + Parquet write — filled in Epic Phase 1."""
+
+import os
+
+import polars as pl
+
+from config.settings import BRONZE_DIR, RAW_DIR
+from src.extract.ingest_log import write_ingest_log
+from src.extract.registry import UNIT_OF_WORK
+
+
+def get_bronze_output_dir(run_date: str, bronze_dir: str = BRONZE_DIR) -> str:
+    """Return (creating if needed) the Bronze output directory for a run_date."""
+    out_dir = os.path.join(bronze_dir, run_date.replace("-", ""))
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def write_bronze_parquet(df: pl.DataFrame | None, record: dict, out_dir: str) -> str | None:
+    """Write df to Parquet in out_dir when the source succeeded, else skip."""
+    if record["status"] != "success":
+        return None
+    path = os.path.join(out_dir, f"{record['source_name']}.parquet")
+    df.write_parquet(path)
+    return path
+
+
+def run_bronze_ingestion(
+    run_date: str, batch_id: str, raw_dir: str = RAW_DIR, bronze_dir: str = BRONZE_DIR
+) -> list[dict]:
+    """Run every registered source through process_source(), writing Bronze Parquet + the combined ingest log."""
+    out_dir = get_bronze_output_dir(run_date, bronze_dir)
+    records = []
+    for run_fn in UNIT_OF_WORK.values():
+        df, record = run_fn(raw_dir, run_date, batch_id)
+        write_bronze_parquet(df, record, out_dir)
+        records.append(record)
+    write_ingest_log(records, out_dir)
+    return records

@@ -8,6 +8,7 @@ import polars as pl
 def attach_lineage(
     df: pl.DataFrame, source_file: str, run_date: str, batch_id: str
 ) -> pl.DataFrame:
+    """Stamp df with the 5 Bronze lineage columns for one ingestion run."""
     return df.with_columns(
         pl.lit(source_file).alias("_source_file"),
         pl.lit("google_drive").alias("_source_platform"),
@@ -18,4 +19,5 @@ def attach_lineage(
 
 
 def cast_to_string(df: pl.DataFrame) -> pl.DataFrame:
+    """Cast every column of df to String — the fail-safe Bronze invariant."""
     return df.select(pl.all().cast(pl.String))

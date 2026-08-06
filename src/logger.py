@@ -13,6 +13,7 @@ _HANDLER_NAME = "vietdist-handler"
 
 
 def get_logger(batch_id: str) -> logging.LoggerAdapter:
+    """Return a logger adapter that stamps every log line with batch_id."""
     logger = logging.getLogger(_LOGGER_NAME)
     # Check by handler name, not `if not logger.handlers`: other tools
     # (e.g. pytest's own log-capturing) can attach their own handlers to
