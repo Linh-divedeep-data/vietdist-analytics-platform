@@ -14,6 +14,7 @@ from config.sources import (
 )
 from src.extract.parser import SchemaMismatchError
 from src.transform_silver import (
+    build_silver_log_record,
     cast_date_columns,
     cast_money_and_qty_columns,
     drop_duplicate_rows,
@@ -23,9 +24,77 @@ from src.transform_silver import (
     run_silver_transform,
     standardize_text_columns,
     transform_source,
+    transform_source_with_stats,
     validate_required_columns,
     write_silver_parquet,
 )
+
+
+def test_build_silver_log_record_has_exactly_eight_fields_with_correct_values():
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=100,
+        row_count_out=95,
+        null_count=3,
+        dedup_count=2,
+        status="success",
+    )
+
+    assert record == {
+        "source_name": "SRC01_sales_transactions",
+        "run_date": "2026-08-04",
+        "row_count_in": 100,
+        "row_count_out": 95,
+        "null_count": 3,
+        "dedup_count": 2,
+        "status": "success",
+        "error_message": None,
+    }
+
+
+def test_build_silver_log_record_no_batch_id_field():
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=1,
+        row_count_out=1,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    assert "batch_id" not in record
+
+
+def test_build_silver_log_record_source_name_strips_only_last_extension():
+    record = build_silver_log_record(
+        source_file="SRC01.sales.v2.csv",
+        run_date="2026-08-04",
+        row_count_in=1,
+        row_count_out=1,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    assert record["source_name"] == "SRC01.sales.v2"
+
+
+def test_build_silver_log_record_carries_explicit_error_message_on_failure():
+    record = build_silver_log_record(
+        source_file="SRC04_product_master.xlsx",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=0,
+        null_count=0,
+        dedup_count=0,
+        status="failed",
+        error_message="thiếu cột bắt buộc ['product_id']",
+    )
+
+    assert record["status"] == "failed"
+    assert record["error_message"] == "thiếu cột bắt buộc ['product_id']"
 
 
 def test_validate_required_columns_passes_when_all_required_columns_present():
@@ -456,6 +525,130 @@ def test_write_silver_parquet_ten_sources_produce_ten_files_in_same_dir(tmp_path
     written = os.listdir(tmp_path)
     assert len(written) == 10
     assert set(written) == {f"{name}.parquet" for name in source_names}
+
+
+def test_transform_source_with_stats_reports_real_row_count_in_and_out():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS001", "CUS002", "CUS003"],
+            "customer_name": ["Nguyen Van A", "Nguyen Van A", "Tran Thi B", "Le Van C"],
+            "customer_type": ["retail", "retail", "wholesale", "retail"],
+            "channel": ["Modern Trade", "Modern Trade", "Traditional Trade", "Modern Trade"],
+            "province": ["TP.HCM", "TP.HCM", "Ha Noi", "Da Nang"],
+            "region": ["mien nam", "mien nam", "mien bac", "mien trung"],
+            "address": ["123 Le Loi", "123 Le Loi", "456 Tran Phu", "789 Hung Vuong"],
+            "phone": ["0900000001", "0900000001", "0900000002", "0900000003"],
+            "tax_code": ["TAX001", "TAX001", "TAX002", None],
+            "join_date": ["2020-01-01", "2020-01-01", "2020-02-01", "2020-03-01"],
+            "credit_limit": ["1,000,000", "1,000,000", "2,000,000", "3,000,000"],
+            "status": ["active", "active", "active", "active"],
+        }
+    )
+    # 4 input rows: row 0/1 are exact duplicates (dedup removes 1),
+    # row 3 has null tax_code (filled, not dropped — tax_code isn't a key column).
+
+    result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["row_count_in"] == 4
+    assert stats["row_count_out"] == result.height
+    assert result.height == 3  # one exact duplicate removed
+
+
+def test_transform_source_with_stats_dedup_count_matches_removed_duplicate_rows():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS001", "CUS002"],
+            "customer_name": ["A", "A", "B"],
+            "customer_type": ["retail", "retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "TP.HCM", "TP.HCM"],
+            "region": ["mien nam", "mien nam", "mien nam"],
+            "address": ["123 Le Loi", "123 Le Loi", "123 Le Loi"],
+            "phone": ["0900000001", "0900000001", "0900000002"],
+            "tax_code": ["TAX001", "TAX001", "TAX002"],
+            "join_date": ["2020-01-01", "2020-01-01", "2020-01-01"],
+            "credit_limit": ["1,000,000", "1,000,000", "1,000,000"],
+            "status": ["active", "active", "active"],
+        }
+    )
+
+    _result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["dedup_count"] == 1
+
+
+def test_transform_source_with_stats_null_count_matches_dropped_null_key_rows():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", None, "CUS003"],
+            "customer_name": ["A", "B", "C"],
+            "customer_type": ["retail", "retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "Ha Noi", "Da Nang"],
+            "region": ["mien nam", "mien bac", "mien trung"],
+            "address": ["123 Le Loi", "456 Tran Phu", "789 Hung Vuong"],
+            "phone": ["0900000001", "0900000002", "0900000003"],
+            "tax_code": ["TAX001", "TAX002", "TAX003"],
+            "join_date": ["2020-01-01", "2020-02-01", "2020-03-01"],
+            "credit_limit": ["1,000,000", "2,000,000", "3,000,000"],
+            "status": ["active", "active", "active"],
+        }
+    )
+
+    _result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["null_count"] == 1
+    assert stats["dedup_count"] == 0
+
+
+def test_transform_source_with_stats_zero_counts_when_nothing_dropped():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS002"],
+            "customer_name": ["A", "B"],
+            "customer_type": ["retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "Ha Noi"],
+            "region": ["mien nam", "mien bac"],
+            "address": ["123 Le Loi", "456 Tran Phu"],
+            "phone": ["0900000001", "0900000002"],
+            "tax_code": ["TAX001", "TAX002"],
+            "join_date": ["2020-01-01", "2020-02-01"],
+            "credit_limit": ["1,000,000", "2,000,000"],
+            "status": ["active", "active"],
+        }
+    )
+
+    _result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["dedup_count"] == 0
+    assert stats["null_count"] == 0
+    assert stats["row_count_in"] == 2
+    assert stats["row_count_out"] == 2
+
+
+def test_transform_source_still_returns_only_a_dataframe_after_refactor():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS002"],
+            "customer_name": ["A", "B"],
+            "customer_type": ["retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "Ha Noi"],
+            "region": ["mien nam", "mien bac"],
+            "address": ["123 Le Loi", "456 Tran Phu"],
+            "phone": ["0900000001", "0900000002"],
+            "tax_code": [None, "TAX002"],
+            "join_date": ["2020-01-01", "2020-02-01"],
+            "credit_limit": ["1,000,000", "2,000,000"],
+            "status": ["active", "active"],
+        }
+    )
+
+    result = transform_source(df, "SRC03_customer_master.csv")
+
+    assert isinstance(result, pl.DataFrame)
+    assert result["tax_code"].to_list() == ["UNKNOWN", "TAX002"]
 
 
 def test_transform_source_casts_and_cleans_src01_shaped_fixture():

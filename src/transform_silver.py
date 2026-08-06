@@ -26,6 +26,33 @@ from src.extract.parser import SchemaMismatchError, validate_schema
 _logger = logging.getLogger(__name__)
 
 
+def build_silver_log_record(
+    source_file: str,
+    run_date: str,
+    row_count_in: int,
+    row_count_out: int,
+    null_count: int,
+    dedup_count: int,
+    status: str,
+    error_message: str | None = None,
+) -> dict:
+    """Build one Silver transform-log record summarizing how a single source was processed.
+
+    Schema deliberately excludes batch_id (unlike Bronze's ingest_log) — Silver
+    logs are keyed by source_name + run_date, not by pipeline run.
+    """
+    return {
+        "source_name": os.path.splitext(source_file)[0],
+        "run_date": run_date,
+        "row_count_in": row_count_in,
+        "row_count_out": row_count_out,
+        "null_count": null_count,
+        "dedup_count": dedup_count,
+        "status": status,
+        "error_message": error_message,
+    }
+
+
 def validate_required_columns(df: pl.DataFrame, source_file: str) -> None:
     """Second defensive check before Silver transform: reuse Bronze's schema validation."""
     try:
@@ -117,19 +144,44 @@ def write_silver_parquet(df: pl.DataFrame, source_name: str, out_dir: str) -> st
     return path
 
 
-def transform_source(df: pl.DataFrame, source_file: str) -> pl.DataFrame:
-    """Run one source through the full 6-step Silver cleaning pipeline."""
+def transform_source_with_stats(df: pl.DataFrame, source_file: str) -> tuple[pl.DataFrame, dict]:
+    """Run one source through the full 6-step Silver cleaning pipeline, also
+    returning row_count_in/out, dedup_count, and null_count for logging
+    (VDAP-419) — real counts computed from df.height deltas, never hardcoded."""
+    row_count_in = df.height
     validate_required_columns(df, source_file)
 
     result = cast_money_and_qty_columns(df, MONEY_QTY_COLUMNS[source_file])
     result = cast_date_columns(result, DATE_COLUMNS[source_file], source_file)
     result = standardize_text_columns(result, TEXT_COLUMNS[source_file])
+
+    before_dedup = result.height
     result = drop_duplicate_rows(result)
+    dedup_count = before_dedup - result.height
+
+    before_null_drop = result.height
     result = drop_null_key_rows(result, KEY_COLUMNS[source_file])
+    null_count = before_null_drop - result.height
 
     if source_file == "SRC03_customer_master.csv":
         result = fill_null_columns(result, ["tax_code"], "UNKNOWN")
 
+    stats = {
+        "row_count_in": row_count_in,
+        "row_count_out": result.height,
+        "dedup_count": dedup_count,
+        "null_count": null_count,
+    }
+    return result, stats
+
+
+def transform_source(df: pl.DataFrame, source_file: str) -> pl.DataFrame:
+    """Run one source through the full 6-step Silver cleaning pipeline.
+
+    Thin wrapper over transform_source_with_stats() — kept for backward
+    compatibility with existing call sites/tests that only need the DataFrame.
+    """
+    result, _stats = transform_source_with_stats(df, source_file)
     return result
 
 
