@@ -12,9 +12,11 @@ from src.transform_gold import (
     build_dim_distributors,
     build_dim_employees,
     build_dim_products,
+    build_fact_sales,
     dedupe_by_business_key,
     drop_lineage_columns,
     drop_pii_columns,
+    join_employee_asof,
 )
 
 
@@ -486,3 +488,81 @@ def test_build_dim_employees_drops_pii_columns():
     assert "phone" not in result.columns
     assert "date_of_birth" not in result.columns
     assert "employee_id" in result.columns
+
+
+def test_join_employee_asof_resolves_version_change_missing_employee_and_resignation():
+    dim_employees = pl.DataFrame(
+        {
+            "employee_id": ["EMP001", "EMP001", "EMP002", "UNKNOWN"],
+            "employee_key": [1, 2, 3, -1],
+            "valid_from": [date(2024, 1, 1), date(2024, 6, 1), date(2024, 1, 1), None],
+            "valid_to": [date(2024, 6, 1), None, date(2024, 9, 30), None],
+        }
+    )
+    orders = pl.DataFrame(
+        {
+            "order_id": ["O1", "O2", "O3", "O4"],
+            "order_date": [date(2024, 2, 1), date(2024, 7, 1), date(2024, 11, 1), date(2024, 3, 1)],
+            "employee_id": ["EMP001", "EMP001", "EMP002", "EMP999"],
+        }
+    )
+
+    result = join_employee_asof(orders, dim_employees, "order_date")
+
+    assert "valid_from" not in result.columns
+    assert "valid_to" not in result.columns
+    rows = {r["order_id"]: r["employee_key"] for r in result.to_dicts()}
+    assert rows["O1"] == 1  # trong khoảng version v1 (2024-01-01 .. 2024-06-01)
+    assert rows["O2"] == 2  # sau khi đổi vùng, version v2 đang active (valid_to=NULL)
+    assert rows["O3"] == -1  # SAU ngày nghỉ việc (2024-09-30) — KHÔNG match version cũ, KHÔNG null
+    assert rows["O4"] == -1  # employee_id không tồn tại trong dim_employees
+    assert result["employee_key"].null_count() == 0
+
+
+def test_build_fact_sales_resolves_all_fks_with_no_nulls():
+    dim_customers = build_dim_customers(
+        pl.DataFrame({"customer_id": ["CUS0001", "CUS0002"], "customer_name": ["An", "Binh"]})
+    )
+    dim_products = build_dim_products(
+        pl.DataFrame({"product_id": ["PRD0001", "PRD0002"], "product_name": ["Sữa", "Bánh"]})
+    )
+    dim_employees = build_dim_employees(
+        pl.DataFrame(
+            {
+                "employee_id": ["EMP001", "EMP001", "EMP002"],
+                "version": ["v1", "v2", "v1"],
+                "effective_date": [date(2024, 1, 1), date(2024, 6, 1), date(2024, 1, 1)],
+                "resign_date": [None, None, date(2024, 9, 30)],
+            }
+        )
+    )
+    sales = pl.DataFrame(
+        {
+            "order_id": ["O1", "O2", "O3", "O4"],
+            "order_date": [date(2024, 2, 1), date(2024, 7, 1), date(2024, 11, 1), date(2024, 3, 1)],
+            "customer_id": ["CUS0001", "CUS0002", "CUS9999", "CUS0001"],
+            "product_id": ["PRD0001", "PRD0002", "PRD0001", "PRD9999"],
+            "employee_id": ["EMP001", "EMP001", "EMP002", "EMP999"],
+            "net_amount": [100.0, 200.0, 50.0, 75.0],
+        }
+    )
+    dim_date = build_dim_date(sales)
+
+    result = build_fact_sales(sales, dim_customers, dim_products, dim_employees, dim_date)
+
+    fk_cols = ["customer_key", "product_key", "date_key", "employee_key"]
+    assert result.select(fk_cols).null_count().sum_horizontal().sum() == 0
+
+    rows = {r["order_id"]: r for r in result.to_dicts()}
+    assert rows["O1"]["customer_key"] == 1
+    assert rows["O1"]["product_key"] == 1
+    assert rows["O1"]["date_key"] == 20240201
+    assert rows["O1"]["employee_key"] == 1  # EMP001 v1, còn hiệu lực tại 2024-02-01
+
+    assert rows["O2"]["employee_key"] == 2  # EMP001 v2 (đổi vùng), đúng version tại 2024-07-01
+
+    assert rows["O3"]["customer_key"] == -1  # CUS9999 không tồn tại
+    assert rows["O3"]["employee_key"] == -1  # EMP002 đã nghỉ trước 2024-11-01
+
+    assert rows["O4"]["product_key"] == -1  # PRD9999 không tồn tại
+    assert rows["O4"]["employee_key"] == -1  # EMP999 không tồn tại trong dim_employees

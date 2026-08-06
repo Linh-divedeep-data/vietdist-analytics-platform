@@ -89,6 +89,27 @@ def build_dim_distributors(silver_df: pl.DataFrame) -> pl.DataFrame:
     return drop_pii_columns(result, "dim_distributors")
 
 
+def join_employee_asof(df: pl.DataFrame, dim_employees_df: pl.DataFrame, date_col: str) -> pl.DataFrame:
+    """As-of join to dim_employees's SCD2 versions: for each employee_id, match the version whose
+    [valid_from, valid_to) window contains date_col. No match (wrong employee_id, or date falls on/after
+    a resigned version's valid_to) -> employee_key = -1, not NULL."""
+    real_versions = (
+        dim_employees_df.filter(pl.col("employee_key") != -1)
+        .select(["employee_id", "employee_key", "valid_from", "valid_to"])
+        .sort("valid_from")
+    )
+    result = df.sort(date_col).join_asof(
+        real_versions, left_on=date_col, right_on="valid_from", by="employee_id", strategy="backward"
+    )
+    result = result.with_columns(
+        pl.when(pl.col("valid_to").is_not_null() & (pl.col(date_col) >= pl.col("valid_to")))
+        .then(None)
+        .otherwise(pl.col("employee_key"))
+        .alias("employee_key")
+    )
+    return result.with_columns(pl.col("employee_key").fill_null(-1)).drop(["valid_from", "valid_to"])
+
+
 def build_dim_date(sales_silver_df: pl.DataFrame) -> pl.DataFrame:
     """Build dim_date: 1 row per calendar day spanning sales_transactions.order_date min..max.
     date_key uses the YYYYMMDD integer convention (Kimball), not a row-position surrogate key."""
@@ -139,3 +160,24 @@ def build_dim_employees(silver_df: pl.DataFrame) -> pl.DataFrame:
     result = add_surrogate_key(result, "employee_key")
     result = add_unknown_member(result, "employee_key", "employee_id", overrides={"is_current": False})
     return drop_pii_columns(result, "dim_employees")
+
+
+def build_fact_sales(
+    sales_silver_df: pl.DataFrame,
+    dim_customers_df: pl.DataFrame,
+    dim_products_df: pl.DataFrame,
+    dim_employees_df: pl.DataFrame,
+    dim_date_df: pl.DataFrame,
+) -> pl.DataFrame:
+    """Build fact_sales: left join customer_key/product_key (fill_null -1), left join date_key
+    (dim_date always matches, no fallback needed), as-of join employee_key via SCD2 versions."""
+    result = sales_silver_df.join(
+        dim_customers_df.select(["customer_id", "customer_key"]), on="customer_id", how="left"
+    ).with_columns(pl.col("customer_key").fill_null(-1))
+    result = result.join(
+        dim_products_df.select(["product_id", "product_key"]), on="product_id", how="left"
+    ).with_columns(pl.col("product_key").fill_null(-1))
+    result = result.join(
+        dim_date_df.select(["full_date", "date_key"]), left_on="order_date", right_on="full_date", how="left"
+    )
+    return join_employee_asof(result, dim_employees_df, "order_date")
