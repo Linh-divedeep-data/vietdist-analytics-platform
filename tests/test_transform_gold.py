@@ -604,3 +604,56 @@ def test_build_fact_targets_resolves_employee_key_keeps_year_month_no_date_key()
     # year/month giữ nguyên giá trị gốc, không bị đổi kiểu hay giá trị
     assert rows[("EMP001", 2)]["year"] == 2024
     assert rows[("EMP001", 2)]["target_revenue"] == 1000.0
+
+
+def test_fact_sales_and_fact_targets_preserve_run_date_and_batch_id_lineage_cols():
+    dim_customers = build_dim_customers(
+        pl.DataFrame({"customer_id": ["CUS0001"], "customer_name": ["An"]})
+    )
+    dim_products = build_dim_products(
+        pl.DataFrame({"product_id": ["PRD0001"], "product_name": ["Sữa"]})
+    )
+    dim_employees = build_dim_employees(
+        pl.DataFrame(
+            {
+                "employee_id": ["EMP001"],
+                "version": ["v1"],
+                "effective_date": [date(2024, 1, 1)],
+                "resign_date": [None],
+            }
+        )
+    )
+    sales = pl.DataFrame(
+        {
+            "order_id": ["O1"],
+            "order_date": [date(2024, 2, 1)],
+            "customer_id": ["CUS0001"],
+            "product_id": ["PRD0001"],
+            "employee_id": ["EMP001"],
+            "net_amount": [100.0],
+            "_run_date": ["2024-02-01"],
+            "_batch_id": ["batch-abc"],
+        }
+    )
+    dim_date = build_dim_date(sales)
+
+    fact_sales = build_fact_sales(sales, dim_customers, dim_products, dim_employees, dim_date)
+
+    assert "_run_date" in fact_sales.columns
+    assert "_batch_id" in fact_sales.columns
+
+    targets = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "year": [2024],
+            "month": [2],
+            "target_revenue": [1000.0],
+            "_run_date": ["2024-02-01"],
+            "_batch_id": ["batch-xyz"],
+        }
+    )
+
+    fact_targets = build_fact_targets(targets, dim_employees)
+
+    assert "_run_date" in fact_targets.columns
+    assert "_batch_id" in fact_targets.columns
