@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 from src.extract.orchestrator import run_bronze_ingestion
 from src.logger import get_logger
+from src.transform_gold import run_gold_transform
 from src.transform_silver import run_silver_transform
 
 
@@ -67,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         records = run_bronze_ingestion(run_date, batch_id)
     elif args.layer == "silver":
         records = run_silver_transform(run_date)
+    elif args.layer == "gold":
+        records = run_gold_transform(run_date)
     exit_code = _check_layer_results(records, layer_name=args.layer, batch_id=batch_id)
     logger.info("pipeline run finished")
     return exit_code

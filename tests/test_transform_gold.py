@@ -26,6 +26,7 @@ from src.transform_gold import (
     drop_pii_columns,
     get_gold_output_dir,
     join_employee_asof,
+    run_gold_transform,
     write_gold_parquet,
 )
 
@@ -913,3 +914,95 @@ def test_write_gold_parquet_row_count_matches(tmp_path):
     path = write_gold_parquet(df, "dim_customers", str(tmp_path))
 
     assert pl.read_parquet(path).height == 4
+
+
+def test_run_gold_transform_writes_all_12_tables_with_valid_cross_table_fks(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)
+
+    pl.DataFrame(
+        {
+            "order_id": ["O1"],
+            "order_date": [date(2024, 1, 15)],
+            "order_year": ["2024"],
+            "order_month": ["1"],
+            "region": ["MIỀN BẮC"],
+            "customer_id": ["CUS0001"],
+            "product_id": ["PRD0001"],
+            "employee_id": ["EMP001"],
+            "net_amount": [100.0],
+        }
+    ).write_parquet(silver_date_dir / "SRC01_sales_transactions.parquet")
+
+    pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "region": ["MIỀN BẮC"],
+            "year": ["2024"],
+            "month": ["1"],
+            "target_revenue": [90.0],
+        }
+    ).write_parquet(silver_date_dir / "SRC02_sales_target_plan.parquet")
+
+    pl.DataFrame({"customer_id": ["CUS0001"], "customer_name": ["An"]}).write_parquet(
+        silver_date_dir / "SRC03_customer_master.parquet"
+    )
+    pl.DataFrame({"product_id": ["PRD0001"], "product_name": ["Sữa"]}).write_parquet(
+        silver_date_dir / "SRC04_product_master.parquet"
+    )
+    pl.DataFrame(
+        {
+            "order_id": ["DORD001"],
+            "distributor_id": ["DIST0001"],
+            "product_id": ["PRD0001"],
+            "fill_rate_pct": [95.0],
+            "ontime_delivery": ["Yes"],
+        }
+    ).write_parquet(silver_date_dir / "SRC05_distributor_orders.parquet")
+    pl.DataFrame({"distributor_id": ["DIST0001"], "distributor_name": ["Kho A"]}).write_parquet(
+        silver_date_dir / "SRC06_distributor_master.parquet"
+    )
+    pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "version": ["v1"],
+            "effective_date": [date(2024, 1, 1)],
+            "resign_date": [None],
+        }
+    ).write_parquet(silver_date_dir / "SRC07_employee_master.parquet")
+    pl.DataFrame({"territory_id": ["TER0001"]}).write_parquet(
+        silver_date_dir / "SRC08_territory_mapping.parquet"
+    )
+    pl.DataFrame(
+        {
+            "order_id": ["RET001"],
+            "customer_id": ["CUS0001"],
+            "product_id": ["PRD0001"],
+            "employee_id": ["EMP001"],
+            "return_date": [date(2024, 2, 1)],
+        }
+    ).write_parquet(silver_date_dir / "SRC09_return_transactions.parquet")
+    pl.DataFrame({"promotion_id": ["PROMO001"]}).write_parquet(
+        silver_date_dir / "SRC10_promotion_program.parquet"
+    )
+
+    records = run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    assert len(records) == 12
+    assert all(r["status"] == "success" for r in records)
+
+    gold_date_dir = gold_dir / "20260804"
+    expected_tables = {
+        "dim_customers", "dim_products", "dim_distributors", "dim_date", "dim_territory",
+        "dim_promotion", "dim_employees", "fact_sales", "fact_targets", "fact_returns",
+        "fact_distributor_orders", "mart_sales_vs_target",
+    }
+    written = {f.stem for f in gold_date_dir.glob("*.parquet")}
+    assert written == expected_tables
+
+    fact_sales = pl.read_parquet(gold_date_dir / "fact_sales.parquet")
+    dim_customers = pl.read_parquet(gold_date_dir / "dim_customers.parquet")
+    valid_customer_keys = set(dim_customers["customer_key"].to_list())
+    assert set(fact_sales["customer_key"].to_list()) <= valid_customer_keys
