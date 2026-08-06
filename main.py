@@ -19,9 +19,21 @@ from src.transform_silver import run_silver_transform
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     """Parse CLI args: required --layer, optional --run-date (defaults to today)."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--layer", choices=["bronze", "silver"], required=True)
-    parser.add_argument("--run-date", required=False, default=None)
+    parser = argparse.ArgumentParser(
+        description="Vietdist pipeline entrypoint — run one layer (or all) for a given run_date."
+    )
+    parser.add_argument(
+        "--layer",
+        choices=["bronze", "silver", "gold", "all"],
+        required=True,
+        help="Which pipeline layer to run: bronze, silver, gold, or all (runs Bronze->Silver->Gold in sequence).",
+    )
+    parser.add_argument(
+        "--run-date",
+        required=False,
+        default=None,
+        help="Run date in YYYY-MM-DD format. Defaults to today (UTC) if omitted.",
+    )
     return parser.parse_args(argv)
 
 

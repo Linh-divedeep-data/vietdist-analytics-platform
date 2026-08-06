@@ -3,7 +3,7 @@ import re
 
 import pytest
 
-from main import _check_layer_results, main
+from main import _check_layer_results, _parse_args, main
 
 LOG_LINE_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} "
@@ -97,7 +97,7 @@ def test_missing_layer_argument_errors(capsys):
 
 def test_invalid_layer_choice_errors(capsys):
     with pytest.raises(SystemExit) as exc_info:
-        main(["--layer", "gold"])
+        main(["--layer", "diamond"])
 
     assert exc_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
@@ -188,3 +188,20 @@ def test_check_layer_results_returns_0_and_logs_ok_when_all_succeed(capsys):
     output = capsys.readouterr().err
     assert "OK" in output
     assert "layer=bronze" in output
+
+
+def test_parse_args_accepts_gold_and_all_layer_choices():
+    args = _parse_args(["--layer", "gold", "--run-date", "2024-01-01"])
+    assert args.layer == "gold"
+
+    args = _parse_args(["--layer", "all", "--run-date", "2024-01-01"])
+    assert args.layer == "all"
+
+
+def test_parse_args_help_does_not_crash_and_has_output(capsys):
+    with pytest.raises(SystemExit):
+        _parse_args(["--help"])
+
+    captured = capsys.readouterr()
+    assert "--layer" in captured.out
+    assert "--run-date" in captured.out
