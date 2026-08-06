@@ -3,32 +3,31 @@ from datetime import date
 
 import polars as pl
 
-from src.transform_gold import (
-    add_is_current_flag,
-    add_scd2_valid_dates,
+from src.transform.gold.base import (
     add_surrogate_key,
     add_unknown_member,
-    add_variance_pct,
-    build_dim_customers,
-    build_dim_date,
-    build_dim_distributors,
-    build_dim_employees,
-    build_dim_products,
-    build_dim_promotion,
-    build_dim_territory,
-    build_fact_distributor_orders,
-    build_fact_returns,
-    build_fact_sales,
-    build_fact_targets,
-    build_mart_sales_vs_target,
     dedupe_by_business_key,
     drop_lineage_columns,
     drop_pii_columns,
-    get_gold_output_dir,
     join_employee_asof,
-    run_gold_transform,
-    write_gold_parquet,
 )
+from src.transform.gold.dims.dim_customers import build_dim_customers
+from src.transform.gold.dims.dim_date import build_dim_date
+from src.transform.gold.dims.dim_distributors import build_dim_distributors
+from src.transform.gold.dims.dim_employees import (
+    add_is_current_flag,
+    add_scd2_valid_dates,
+    build_dim_employees,
+)
+from src.transform.gold.dims.dim_products import build_dim_products
+from src.transform.gold.dims.dim_promotion import build_dim_promotion
+from src.transform.gold.dims.dim_territory import build_dim_territory
+from src.transform.gold.facts.fact_distributor_orders import build_fact_distributor_orders
+from src.transform.gold.facts.fact_returns import build_fact_returns
+from src.transform.gold.facts.fact_sales import build_fact_sales
+from src.transform.gold.facts.fact_targets import build_fact_targets
+from src.transform.gold.marts.mart_sales_vs_target import add_variance_pct, build_mart_sales_vs_target
+from src.transform.gold.orchestrator import get_gold_output_dir, run_gold_transform, write_gold_parquet
 
 
 def test_drop_lineage_columns_removes_all_5_lineage_columns():
@@ -916,12 +915,8 @@ def test_write_gold_parquet_row_count_matches(tmp_path):
     assert pl.read_parquet(path).height == 4
 
 
-def test_run_gold_transform_writes_all_12_tables_with_valid_cross_table_fks(tmp_path):
-    silver_dir = tmp_path / "silver"
-    gold_dir = tmp_path / "gold"
-    silver_date_dir = silver_dir / "20260804"
-    silver_date_dir.mkdir(parents=True)
-
+def _write_full_silver_fixture(silver_date_dir):
+    """Write one valid row per source, enough for run_gold_transform() to build all 12 tables."""
     pl.DataFrame(
         {
             "order_id": ["O1"],
@@ -988,6 +983,14 @@ def test_run_gold_transform_writes_all_12_tables_with_valid_cross_table_fks(tmp_
         silver_date_dir / "SRC10_promotion_program.parquet"
     )
 
+
+def test_run_gold_transform_writes_all_12_tables_with_valid_cross_table_fks(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)
+    _write_full_silver_fixture(silver_date_dir)
+
     records = run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
 
     assert len(records) == 12
@@ -999,10 +1002,60 @@ def test_run_gold_transform_writes_all_12_tables_with_valid_cross_table_fks(tmp_
         "dim_promotion", "dim_employees", "fact_sales", "fact_targets", "fact_returns",
         "fact_distributor_orders", "mart_sales_vs_target",
     }
-    written = {f.stem for f in gold_date_dir.glob("*.parquet")}
+    written = {f.stem for f in gold_date_dir.glob("*.parquet")} - {"gold_log"}
     assert written == expected_tables
+    assert os.path.exists(gold_date_dir / "gold_log.parquet")
 
     fact_sales = pl.read_parquet(gold_date_dir / "fact_sales.parquet")
     dim_customers = pl.read_parquet(gold_date_dir / "dim_customers.parquet")
     valid_customer_keys = set(dim_customers["customer_key"].to_list())
     assert set(fact_sales["customer_key"].to_list()) <= valid_customer_keys
+
+
+def test_run_gold_transform_success_writes_one_gold_log_row_per_table(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)
+    _write_full_silver_fixture(silver_date_dir)
+
+    run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    gold_log = pl.read_parquet(gold_dir / "20260804" / "gold_log.parquet")
+    assert gold_log.height == 12
+    assert set(gold_log["status"].to_list()) == {"success"}
+    assert gold_log["error_message"].null_count() == 12
+    assert gold_log["row_count"].min() > 0
+
+
+def test_run_gold_transform_failure_writes_single_gold_layer_log_row(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)  # no silver Parquet files written -> read() raises
+
+    records = run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    assert len(records) == 1
+    assert records[0]["status"] == "failed"
+
+    gold_log = pl.read_parquet(gold_dir / "20260804" / "gold_log.parquet")
+    assert gold_log.height == 1
+    assert gold_log["table_name"].item() == "gold_layer"
+    assert gold_log["status"].item() == "failed"
+    assert gold_log["row_count"].item() == 0
+    assert gold_log["error_message"].item() is not None
+
+
+def test_run_gold_transform_rerun_appends_gold_log_rows(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)
+    _write_full_silver_fixture(silver_date_dir)
+
+    run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+    run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    gold_log = pl.read_parquet(gold_dir / "20260804" / "gold_log.parquet")
+    assert gold_log.height == 24
