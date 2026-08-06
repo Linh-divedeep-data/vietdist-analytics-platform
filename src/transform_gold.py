@@ -28,25 +28,56 @@ def dedupe_by_business_key(df: pl.DataFrame, key_col: str) -> pl.DataFrame:
     return result
 
 
+def add_unknown_member(
+    df: pl.DataFrame, key_col: str, business_key_col: str, overrides: dict | None = None
+) -> pl.DataFrame:
+    """Prepend a static 'Unknown Member' row (key_col=-1) so a Fact FK that can't resolve a
+    real business key still points at a real Dim row instead of NULL."""
+    overrides = overrides or {}
+    df = df.with_columns(pl.col(key_col).cast(pl.Int64))
+
+    unknown_values = {}
+    for col_name, dtype in df.schema.items():
+        if col_name == key_col:
+            unknown_values[col_name] = -1
+        elif col_name == business_key_col:
+            unknown_values[col_name] = "UNKNOWN"
+        elif col_name in overrides:
+            unknown_values[col_name] = overrides[col_name]
+        elif dtype == pl.Utf8:
+            unknown_values[col_name] = "Unknown"
+        else:
+            unknown_values[col_name] = None
+
+    unknown_row = pl.DataFrame([unknown_values], schema=df.schema)
+    return pl.concat([unknown_row, df])
+
+
 def build_dim_customers(silver_df: pl.DataFrame) -> pl.DataFrame:
-    """Build dim_customers: drop lineage columns, dedupe by customer_id, add customer_key (1-based)."""
+    """Build dim_customers: drop lineage columns, dedupe by customer_id, add customer_key (1-based),
+    prepend Unknown Member row (key=-1)."""
     result = drop_lineage_columns(silver_df)
     result = dedupe_by_business_key(result, "customer_id")
-    return add_surrogate_key(result, "customer_key")
+    result = add_surrogate_key(result, "customer_key")
+    return add_unknown_member(result, "customer_key", "customer_id")
 
 
 def build_dim_products(silver_df: pl.DataFrame) -> pl.DataFrame:
-    """Build dim_products: drop lineage columns, dedupe by product_id, add product_key (1-based)."""
+    """Build dim_products: drop lineage columns, dedupe by product_id, add product_key (1-based),
+    prepend Unknown Member row (key=-1)."""
     result = drop_lineage_columns(silver_df)
     result = dedupe_by_business_key(result, "product_id")
-    return add_surrogate_key(result, "product_key")
+    result = add_surrogate_key(result, "product_key")
+    return add_unknown_member(result, "product_key", "product_id")
 
 
 def build_dim_distributors(silver_df: pl.DataFrame) -> pl.DataFrame:
-    """Build dim_distributors: drop lineage columns, dedupe by distributor_id, add distributor_key (1-based)."""
+    """Build dim_distributors: drop lineage columns, dedupe by distributor_id, add distributor_key
+    (1-based), prepend Unknown Member row (key=-1)."""
     result = drop_lineage_columns(silver_df)
     result = dedupe_by_business_key(result, "distributor_id")
-    return add_surrogate_key(result, "distributor_key")
+    result = add_surrogate_key(result, "distributor_key")
+    return add_unknown_member(result, "distributor_key", "distributor_id")
 
 
 def build_dim_date(sales_silver_df: pl.DataFrame) -> pl.DataFrame:
@@ -91,8 +122,10 @@ def add_is_current_flag(df: pl.DataFrame) -> pl.DataFrame:
 
 def build_dim_employees(silver_df: pl.DataFrame) -> pl.DataFrame:
     """Build dim_employees (SCD2): drop lineage columns, compute valid_from/valid_to + is_current,
-    add employee_key (1-based) — 1 employee_id may have several employee_key, one per version."""
+    add employee_key (1-based), prepend Unknown Member row (key=-1, is_current=False) — 1 employee_id
+    may have several employee_key, one per version."""
     result = drop_lineage_columns(silver_df)
     result = add_scd2_valid_dates(result)
     result = add_is_current_flag(result)
-    return add_surrogate_key(result, "employee_key")
+    result = add_surrogate_key(result, "employee_key")
+    return add_unknown_member(result, "employee_key", "employee_id", overrides={"is_current": False})

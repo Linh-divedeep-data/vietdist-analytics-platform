@@ -6,6 +6,7 @@ from src.transform_gold import (
     add_is_current_flag,
     add_scd2_valid_dates,
     add_surrogate_key,
+    add_unknown_member,
     build_dim_customers,
     build_dim_date,
     build_dim_distributors,
@@ -80,6 +81,44 @@ def test_dedupe_by_business_key_does_not_log_when_no_duplicates(caplog):
     assert caplog.text == ""
 
 
+def test_add_unknown_member_prepends_row_with_key_minus_1_and_infers_unknown_string_default():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS0001", "CUS0002"],
+            "customer_name": ["An", "Binh"],
+        }
+    ).with_row_index(name="customer_key", offset=1)
+
+    result = add_unknown_member(df, "customer_key", "customer_id")
+
+    assert result["customer_key"].to_list() == [-1, 1, 2]
+    assert result.schema["customer_key"] == pl.Int64
+    unknown_row = result.filter(pl.col("customer_key") == -1).row(0, named=True)
+    assert unknown_row["customer_id"] == "UNKNOWN"
+    assert unknown_row["customer_name"] == "Unknown"
+
+
+def test_add_unknown_member_applies_overrides_instead_of_dtype_default():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "valid_from": [date(2024, 1, 1)],
+            "valid_to": [None],
+            "is_current": [True],
+        }
+    ).with_row_index(name="employee_key", offset=1)
+
+    result = add_unknown_member(df, "employee_key", "employee_id", overrides={"is_current": False})
+
+    unknown_row = result.filter(pl.col("employee_key") == -1).row(0, named=True)
+    assert unknown_row["employee_id"] == "UNKNOWN"
+    assert unknown_row["valid_from"] is None
+    assert unknown_row["valid_to"] is None
+    # is_current must be the override (False), NOT the dtype default (None/null) —
+    # a null here would break any downstream filter(pl.col("is_current")) that expects a bool.
+    assert unknown_row["is_current"] is False
+
+
 def test_build_dim_customers_generates_1_based_surrogate_key():
     df = pl.DataFrame(
         {
@@ -90,7 +129,7 @@ def test_build_dim_customers_generates_1_based_surrogate_key():
 
     result = build_dim_customers(df)
 
-    assert result["customer_key"].to_list() == [1, 2]
+    assert result["customer_key"].to_list() == [-1, 1, 2]
 
 
 def test_build_dim_customers_dedupes_by_customer_id_keeping_first_row():
@@ -103,7 +142,7 @@ def test_build_dim_customers_dedupes_by_customer_id_keeping_first_row():
 
     result = build_dim_customers(df)
 
-    assert result.height == 2
+    assert result.height == 3
     kept_name = result.filter(pl.col("customer_id") == "CUS0001")["customer_name"].to_list()
     assert kept_name == ["An (bản gốc)"]
 
@@ -136,8 +175,8 @@ def test_build_dim_products_generates_1_based_surrogate_key_and_dedupes_by_produ
 
     result = build_dim_products(df)
 
-    assert result.height == 2
-    assert result["product_key"].to_list() == [1, 2]
+    assert result.height == 3
+    assert result["product_key"].to_list() == [-1, 1, 2]
     assert "_batch_id" not in result.columns
     kept_name = result.filter(pl.col("product_id") == "PRD0001")["product_name"].to_list()
     assert kept_name == ["Sữa tươi (bản gốc)"]
@@ -154,11 +193,41 @@ def test_build_dim_distributors_generates_1_based_surrogate_key_and_dedupes_by_d
 
     result = build_dim_distributors(df)
 
-    assert result.height == 2
-    assert result["distributor_key"].to_list() == [1, 2]
+    assert result.height == 3
+    assert result["distributor_key"].to_list() == [-1, 1, 2]
     assert "_batch_id" not in result.columns
     kept_name = result.filter(pl.col("distributor_id") == "DIST0001")["distributor_name"].to_list()
     assert kept_name == ["Kho A (bản gốc)"]
+
+
+def test_build_dim_customers_has_exactly_1_unknown_member_row():
+    df = pl.DataFrame({"customer_id": ["CUS0001"], "customer_name": ["An"]})
+
+    result = build_dim_customers(df)
+
+    unknown_rows = result.filter(pl.col("customer_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["customer_id"].to_list() == ["UNKNOWN"]
+
+
+def test_build_dim_products_has_exactly_1_unknown_member_row():
+    df = pl.DataFrame({"product_id": ["PRD0001"], "product_name": ["Bánh quy"]})
+
+    result = build_dim_products(df)
+
+    unknown_rows = result.filter(pl.col("product_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["product_id"].to_list() == ["UNKNOWN"]
+
+
+def test_build_dim_distributors_has_exactly_1_unknown_member_row():
+    df = pl.DataFrame({"distributor_id": ["DIST0001"], "distributor_name": ["Kho A"]})
+
+    result = build_dim_distributors(df)
+
+    unknown_rows = result.filter(pl.col("distributor_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["distributor_id"].to_list() == ["UNKNOWN"]
 
 
 def test_build_dim_date_covers_full_min_to_max_range_inclusive():
@@ -300,9 +369,10 @@ def test_build_dim_employees_chains_scd2_dates_flag_and_surrogate_key():
 
     assert "_batch_id" not in result.columns
     assert result.columns[0] == "employee_key"
-    assert result["employee_key"].to_list() == [1, 2, 3]
+    real_rows = result.filter(pl.col("employee_key") != -1)
+    assert real_rows["employee_key"].to_list() == [1, 2, 3]
 
-    rows = {(r["employee_id"], r["version"]): r for r in result.to_dicts()}
+    rows = {(r["employee_id"], r["version"]): r for r in real_rows.to_dicts()}
     # EMP001 v1: không phải version cuối -> valid_to = effective_date của v2, không phải current
     assert rows[("EMP001", "v1")]["valid_to"] == date(2024, 6, 1)
     assert rows[("EMP001", "v1")]["is_current"] is False
@@ -312,3 +382,26 @@ def test_build_dim_employees_chains_scd2_dates_flag_and_surrogate_key():
     # EMP002 v1: version cuối, đã nghỉ -> valid_to = resign_date, KHÔNG current
     assert rows[("EMP002", "v1")]["valid_to"] == date(2024, 9, 30)
     assert rows[("EMP002", "v1")]["is_current"] is False
+
+
+def test_build_dim_employees_unknown_member_has_is_current_false_not_null():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "version": ["v1"],
+            "effective_date": [date(2024, 1, 1)],
+            "resign_date": [None],
+        }
+    )
+
+    result = build_dim_employees(df)
+
+    unknown_rows = result.filter(pl.col("employee_key") == -1)
+    assert unknown_rows.height == 1
+    unknown_row = unknown_rows.row(0, named=True)
+    assert unknown_row["employee_id"] == "UNKNOWN"
+    assert unknown_row["valid_from"] is None
+    assert unknown_row["valid_to"] is None
+    # Must be False, not null — a null is_current would break any dashboard/report
+    # filter that does filter(pl.col("is_current")) expecting a plain boolean.
+    assert unknown_row["is_current"] is False
