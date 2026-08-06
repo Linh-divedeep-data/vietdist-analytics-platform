@@ -14,6 +14,7 @@ from src.transform_gold import (
     build_dim_products,
     build_dim_promotion,
     build_dim_territory,
+    build_fact_returns,
     build_fact_sales,
     build_fact_targets,
     dedupe_by_business_key,
@@ -712,3 +713,52 @@ def test_build_dim_promotion_generates_surrogate_key_and_unknown_member():
     assert real_row["start_date"] == date(2024, 6, 1)
     assert real_row["end_date"] == date(2024, 6, 30)
     assert real_row["applicable_products"] == "PRD0001,PRD0002"
+
+
+def test_build_fact_returns_resolves_all_fks_with_no_nulls_and_no_row_fanout():
+    dim_customers = build_dim_customers(
+        pl.DataFrame({"customer_id": ["CUS0001", "CUS0002"], "customer_name": ["An", "Binh"]})
+    )
+    dim_products = build_dim_products(
+        pl.DataFrame({"product_id": ["PRD0001", "PRD0002"], "product_name": ["Sữa", "Bánh"]})
+    )
+    dim_employees = build_dim_employees(
+        pl.DataFrame(
+            {
+                "employee_id": ["EMP001", "EMP001", "EMP002"],
+                "version": ["v1", "v2", "v1"],
+                "effective_date": [date(2024, 1, 1), date(2024, 6, 1), date(2024, 1, 1)],
+                "resign_date": [None, None, date(2024, 9, 30)],
+            }
+        )
+    )
+    returns = pl.DataFrame(
+        {
+            "return_id": ["R1", "R2", "R3", "R4"],
+            "return_date": [date(2024, 2, 1), date(2024, 7, 1), date(2024, 11, 1), date(2024, 3, 1)],
+            "customer_id": ["CUS0001", "CUS0002", "CUS9999", "CUS0001"],
+            "product_id": ["PRD0001", "PRD0002", "PRD0001", "PRD9999"],
+            "employee_id": ["EMP001", "EMP001", "EMP002", "EMP999"],
+            "return_amount": [50.0, 80.0, 20.0, 30.0],
+        }
+    )
+
+    result = build_fact_returns(returns, dim_customers, dim_products, dim_employees)
+
+    assert result.height == returns.height  # điểm quan trọng nhất: không fan-out
+
+    fk_cols = ["customer_key", "product_key", "employee_key"]
+    assert result.select(fk_cols).null_count().sum_horizontal().sum() == 0
+
+    rows = {r["return_id"]: r for r in result.to_dicts()}
+    assert rows["R1"]["customer_key"] == 1
+    assert rows["R1"]["product_key"] == 1
+    assert rows["R1"]["employee_key"] == 1  # EMP001 v1, còn hiệu lực tại 2024-02-01
+
+    assert rows["R2"]["employee_key"] == 2  # EMP001 v2 (đổi vùng), đúng version tại 2024-07-01
+
+    assert rows["R3"]["customer_key"] == -1  # CUS9999 không tồn tại
+    assert rows["R3"]["employee_key"] == -1  # EMP002 đã nghỉ trước 2024-11-01
+
+    assert rows["R4"]["product_key"] == -1  # PRD9999 không tồn tại
+    assert rows["R4"]["employee_key"] == -1  # EMP999 không tồn tại trong dim_employees
