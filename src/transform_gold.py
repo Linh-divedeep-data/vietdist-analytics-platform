@@ -62,11 +62,12 @@ def drop_pii_columns(df: pl.DataFrame, dim_name: str) -> pl.DataFrame:
 
 def build_dim_customers(silver_df: pl.DataFrame) -> pl.DataFrame:
     """Build dim_customers: drop lineage columns, dedupe by customer_id, add customer_key (1-based),
-    prepend Unknown Member row (key=-1)."""
+    prepend Unknown Member row (key=-1), drop PII columns."""
     result = drop_lineage_columns(silver_df)
     result = dedupe_by_business_key(result, "customer_id")
     result = add_surrogate_key(result, "customer_key")
-    return add_unknown_member(result, "customer_key", "customer_id")
+    result = add_unknown_member(result, "customer_key", "customer_id")
+    return drop_pii_columns(result, "dim_customers")
 
 
 def build_dim_products(silver_df: pl.DataFrame) -> pl.DataFrame:
@@ -80,11 +81,12 @@ def build_dim_products(silver_df: pl.DataFrame) -> pl.DataFrame:
 
 def build_dim_distributors(silver_df: pl.DataFrame) -> pl.DataFrame:
     """Build dim_distributors: drop lineage columns, dedupe by distributor_id, add distributor_key
-    (1-based), prepend Unknown Member row (key=-1)."""
+    (1-based), prepend Unknown Member row (key=-1), drop PII columns."""
     result = drop_lineage_columns(silver_df)
     result = dedupe_by_business_key(result, "distributor_id")
     result = add_surrogate_key(result, "distributor_key")
-    return add_unknown_member(result, "distributor_key", "distributor_id")
+    result = add_unknown_member(result, "distributor_key", "distributor_id")
+    return drop_pii_columns(result, "dim_distributors")
 
 
 def build_dim_date(sales_silver_df: pl.DataFrame) -> pl.DataFrame:
@@ -129,10 +131,11 @@ def add_is_current_flag(df: pl.DataFrame) -> pl.DataFrame:
 
 def build_dim_employees(silver_df: pl.DataFrame) -> pl.DataFrame:
     """Build dim_employees (SCD2): drop lineage columns, compute valid_from/valid_to + is_current,
-    add employee_key (1-based), prepend Unknown Member row (key=-1, is_current=False) — 1 employee_id
-    may have several employee_key, one per version."""
+    add employee_key (1-based), prepend Unknown Member row (key=-1, is_current=False), drop PII
+    columns — 1 employee_id may have several employee_key, one per version."""
     result = drop_lineage_columns(silver_df)
     result = add_scd2_valid_dates(result)
     result = add_is_current_flag(result)
     result = add_surrogate_key(result, "employee_key")
-    return add_unknown_member(result, "employee_key", "employee_id", overrides={"is_current": False})
+    result = add_unknown_member(result, "employee_key", "employee_id", overrides={"is_current": False})
+    return drop_pii_columns(result, "dim_employees")
