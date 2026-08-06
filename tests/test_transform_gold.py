@@ -14,6 +14,7 @@ from src.transform_gold import (
     build_dim_products,
     dedupe_by_business_key,
     drop_lineage_columns,
+    drop_pii_columns,
 )
 
 
@@ -117,6 +118,31 @@ def test_add_unknown_member_applies_overrides_instead_of_dtype_default():
     # is_current must be the override (False), NOT the dtype default (None/null) —
     # a null here would break any downstream filter(pl.col("is_current")) that expects a bool.
     assert unknown_row["is_current"] is False
+
+
+def test_drop_pii_columns_removes_configured_columns_for_dim():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS0001"],
+            "address": ["123 Lê Lợi"],
+            "phone": ["0900000000"],
+            "tax_code": ["MST0001"],
+        }
+    )
+
+    result = drop_pii_columns(df, "dim_customers")
+
+    assert result.columns == ["customer_id"]
+
+
+def test_drop_pii_columns_is_noop_when_pii_column_absent():
+    df = pl.DataFrame({"distributor_id": ["DIST0001"], "phone": ["0900000000"]})
+
+    result = drop_pii_columns(df, "dim_distributors")
+
+    # dim_distributors is configured to drop phone AND tax_code, but this df never had
+    # tax_code — strict=False must not raise for the missing one.
+    assert result.columns == ["distributor_id"]
 
 
 def test_build_dim_customers_generates_1_based_surrogate_key():
@@ -228,6 +254,42 @@ def test_build_dim_distributors_has_exactly_1_unknown_member_row():
     unknown_rows = result.filter(pl.col("distributor_key") == -1)
     assert unknown_rows.height == 1
     assert unknown_rows["distributor_id"].to_list() == ["UNKNOWN"]
+
+
+def test_build_dim_customers_drops_pii_columns():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS0001"],
+            "customer_name": ["An"],
+            "address": ["123 Lê Lợi"],
+            "phone": ["0900000000"],
+            "tax_code": ["MST0001"],
+        }
+    )
+
+    result = build_dim_customers(df)
+
+    assert "address" not in result.columns
+    assert "phone" not in result.columns
+    assert "tax_code" not in result.columns
+    assert "customer_name" in result.columns
+
+
+def test_build_dim_distributors_drops_pii_columns():
+    df = pl.DataFrame(
+        {
+            "distributor_id": ["DIST0001"],
+            "distributor_name": ["Kho A"],
+            "phone": ["0900000000"],
+            "tax_code": ["MST0001"],
+        }
+    )
+
+    result = build_dim_distributors(df)
+
+    assert "phone" not in result.columns
+    assert "tax_code" not in result.columns
+    assert "distributor_name" in result.columns
 
 
 def test_build_dim_date_covers_full_min_to_max_range_inclusive():
@@ -405,3 +467,22 @@ def test_build_dim_employees_unknown_member_has_is_current_false_not_null():
     # Must be False, not null — a null is_current would break any dashboard/report
     # filter that does filter(pl.col("is_current")) expecting a plain boolean.
     assert unknown_row["is_current"] is False
+
+
+def test_build_dim_employees_drops_pii_columns():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "version": ["v1"],
+            "effective_date": [date(2024, 1, 1)],
+            "resign_date": [None],
+            "phone": ["0900000000"],
+            "date_of_birth": [date(1990, 1, 1)],
+        }
+    )
+
+    result = build_dim_employees(df)
+
+    assert "phone" not in result.columns
+    assert "date_of_birth" not in result.columns
+    assert "employee_id" in result.columns
