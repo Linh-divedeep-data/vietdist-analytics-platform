@@ -795,7 +795,7 @@ def test_run_silver_transform_writes_ten_files_for_all_valid_sources(tmp_path):
     records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet") and f != "silver_log.parquet"]
     assert len(written) == 10
     assert len(records) == 10
     assert all(r["status"] == "success" for r in records)
@@ -817,7 +817,7 @@ def test_run_silver_transform_continues_after_one_source_fails(tmp_path):
     records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet") and f != "silver_log.parquet"]
     assert len(written) == 9  # the 9 valid sources still got written
 
     statuses = {r["source_file"]: r["status"] for r in records}
@@ -858,14 +858,14 @@ def test_run_silver_transform_is_idempotent_when_rerun_with_same_run_date(tmp_pa
     first_run_counts = {
         f: pl.read_parquet(silver_date_dir / f).height
         for f in os.listdir(silver_date_dir)
-        if f.endswith(".parquet")
+        if f.endswith(".parquet") and f != "silver_log.parquet"
     }
 
     run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
     second_run_counts = {
         f: pl.read_parquet(silver_date_dir / f).height
         for f in os.listdir(silver_date_dir)
-        if f.endswith(".parquet")
+        if f.endswith(".parquet") and f != "silver_log.parquet"
     }
 
     assert len(first_run_counts) == 10
@@ -1059,3 +1059,69 @@ def test_write_silver_log_preserves_failed_record_fields_on_readback(tmp_path):
 
     assert df["status"].to_list() == ["failed"]
     assert df["error_message"].to_list() == ["thiếu cột bắt buộc ['product_id']"]
+
+
+def test_run_silver_transform_persists_silver_log_parquet_with_ten_rows(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    log_path = silver_date_dir / "silver_log.parquet"
+    assert log_path.exists()
+
+    log_df = pl.read_parquet(log_path)
+    assert log_df.height == 10
+    assert set(log_df["status"].to_list()) == {"success"}
+
+
+def test_run_silver_transform_rerun_same_run_date_appends_to_silver_log_not_overwrite(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    log_df = pl.read_parquet(silver_date_dir / "silver_log.parquet")
+
+    # 10 sources x 2 runs = 20 rows — the second run's records must be
+    # appended, not replace the first run's (this is the core VDAP-420 AC:
+    # deliberately the OPPOSITE of the per-source data Parquets, which DO
+    # get overwritten on rerun — see test_run_silver_transform_is_idempotent_when_rerun_with_same_run_date).
+    assert log_df.height == 20
+
+
+def test_run_silver_transform_logs_failed_status_to_silver_log_parquet(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    failing_source = "SRC04_product_master.xlsx"
+    df = _minimal_valid_bronze_fixture(failing_source, drop_column="product_id")
+    df.write_parquet(bronze_date_dir / "SRC04_product_master.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    log_df = pl.read_parquet(silver_date_dir / "silver_log.parquet")
+    failed_row = log_df.filter(pl.col("source_name") == "SRC04_product_master")
+
+    assert failed_row["status"].to_list() == ["failed"]
+    assert failed_row["error_message"].to_list()[0] is not None
