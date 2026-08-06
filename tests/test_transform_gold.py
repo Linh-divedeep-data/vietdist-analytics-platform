@@ -18,6 +18,7 @@ from src.transform_gold import (
     build_fact_returns,
     build_fact_sales,
     build_fact_targets,
+    build_mart_sales_vs_target,
     dedupe_by_business_key,
     drop_lineage_columns,
     drop_pii_columns,
@@ -799,3 +800,47 @@ def test_build_fact_returns_resolves_all_fks_with_no_nulls_and_no_row_fanout():
 
     assert rows["R4"]["product_key"] == -1  # PRD9999 không tồn tại
     assert rows["R4"]["employee_key"] == -1  # EMP999 không tồn tại trong dim_employees
+
+
+def test_build_mart_sales_vs_target_aggregates_actual_and_target_by_region_year_month():
+    fact_sales = pl.DataFrame(
+        {
+            "order_id": ["O1", "O2", "O3", "O4"],
+            "region": ["MIỀN BẮC", "MIỀN BẮC", "MIỀN NAM", "MIỀN NAM"],
+            "order_year": ["2024", "2024", "2024", "2024"],
+            "order_month": ["1", "1", "1", "2"],
+            "net_amount": [100.0, 50.0, 200.0, 30.0],
+        }
+    )
+    fact_targets = pl.DataFrame(
+        {
+            "employee_id": ["EMP001", "EMP002", "EMP003"],
+            "region": ["MIỀN BẮC", "MIỀN BẮC", "MIỀN TRUNG"],
+            "year": ["2024", "2024", "2024"],
+            "month": ["1", "1", "1"],
+            "target_revenue": [120.0, 30.0, 500.0],
+        }
+    )
+
+    result = build_mart_sales_vs_target(fact_sales, fact_targets)
+
+    assert set(result.columns) == {"region", "year", "month", "actual_revenue", "target_revenue"}
+
+    rows = {(r["region"], r["year"], r["month"]): r for r in result.to_dicts()}
+
+    # MIỀN BẮC/2024/1: cả 2 phía đều có dữ liệu -> actual=150 (100+50), target=150 (120+30)
+    bac = rows[("MIỀN BẮC", "2024", "1")]
+    assert bac["actual_revenue"] == 150.0
+    assert bac["target_revenue"] == 150.0
+
+    # MIỀN NAM/2024/2: có sales, KHÔNG có target -> target_revenue NULL, không bị drop khỏi kết quả
+    nam_feb = rows[("MIỀN NAM", "2024", "2")]
+    assert nam_feb["actual_revenue"] == 30.0
+    assert nam_feb["target_revenue"] is None
+
+    # MIỀN TRUNG/2024/1: có target, KHÔNG có sales -> actual_revenue NULL, không bị drop khỏi kết quả
+    trung = rows[("MIỀN TRUNG", "2024", "1")]
+    assert trung["actual_revenue"] is None
+    assert trung["target_revenue"] == 500.0
+
+    assert result.height == 4
