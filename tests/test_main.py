@@ -106,7 +106,7 @@ def test_invalid_layer_choice_errors(capsys):
 def test_silver_layer_calls_run_silver_transform_with_run_date(monkeypatch):
     captured = {}
 
-    def fake_run_silver_transform(run_date):
+    def fake_run_silver_transform(run_date, batch_id):
         captured["run_date"] = run_date
         return [{"source_file": "SRC01_sales_transactions.csv", "status": "success"}]
 
@@ -121,7 +121,7 @@ def test_silver_layer_calls_run_silver_transform_with_run_date(monkeypatch):
 def test_silver_layer_returns_1_when_run_silver_transform_reports_failure(monkeypatch):
     monkeypatch.setattr(
         "main.run_silver_transform",
-        lambda run_date: [
+        lambda run_date, batch_id: [
             {"source_file": "SRC01_sales_transactions.csv", "status": "success"},
             {"source_file": "SRC04_product_master.xlsx", "status": "failed"},
         ],
@@ -135,7 +135,7 @@ def test_silver_layer_returns_1_when_run_silver_transform_reports_failure(monkey
 def test_explicit_run_date_is_passed_through_to_silver_transform(monkeypatch):
     captured = {}
 
-    def fake_run_silver_transform(run_date):
+    def fake_run_silver_transform(run_date, batch_id):
         captured["run_date"] = run_date
         return [{"source_file": "SRC01_sales_transactions.csv", "status": "success"}]
 
@@ -144,6 +144,34 @@ def test_explicit_run_date_is_passed_through_to_silver_transform(monkeypatch):
     main(["--layer", "silver", "--run-date", "2026-08-04"])
 
     assert captured["run_date"] == "2026-08-04"
+
+
+def test_silver_layer_receives_same_batch_id_as_pipeline_run(monkeypatch):
+    captured = {}
+
+    def fake_run_silver_transform(run_date, batch_id):
+        captured["batch_id"] = batch_id
+        return [{"source_file": "SRC01_sales_transactions.csv", "status": "success"}]
+
+    monkeypatch.setattr("main.run_silver_transform", fake_run_silver_transform)
+
+    main(["--layer", "silver"])
+
+    assert captured["batch_id"]
+
+
+def test_gold_layer_receives_same_batch_id_as_pipeline_run(monkeypatch):
+    captured = {}
+
+    def fake_run_gold_transform(run_date, batch_id):
+        captured["batch_id"] = batch_id
+        return [{"table_name": "dim_customers", "status": "success"}]
+
+    monkeypatch.setattr("main.run_gold_transform", fake_run_gold_transform)
+
+    main(["--layer", "gold"])
+
+    assert captured["batch_id"]
 
 
 def test_bronze_layer_without_run_date_still_defaults_to_today(monkeypatch):

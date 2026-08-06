@@ -2,11 +2,13 @@
 
 import logging
 import os
+import uuid
 
 import polars as pl
 
 from config.settings import GOLD_DIR, SILVER_DIR
 from config.sources import PII_COLUMNS_TO_DROP
+from src.logger import get_logger
 from src.transform_silver import get_silver_output_dir
 
 _logger = logging.getLogger(__name__)
@@ -294,11 +296,15 @@ def write_gold_parquet(df: pl.DataFrame, table_name: str, out_dir: str) -> str:
     return path
 
 
-def run_gold_transform(run_date: str, silver_dir: str = SILVER_DIR, gold_dir: str = GOLD_DIR) -> list[dict]:
+def run_gold_transform(
+    run_date: str, silver_dir: str = SILVER_DIR, gold_dir: str = GOLD_DIR, batch_id: str | None = None
+) -> list[dict]:
     """Build every Dim/Fact/Mart table from Silver output and write them to Gold.
     Unlike Bronze/Silver (independent per-source loops), Gold's 12 tables form one
     dependency chain (dims -> facts -> mart) — a failure anywhere aborts the whole
-    batch instead of skipping just one source, reported as a single failed record."""
+    batch instead of skipping just one source, reported as a single failed record.
+    batch_id is optional (mirrors run_silver_transform) — a fresh uuid4 is generated
+    here when the caller doesn't supply one, purely to stamp the error log line."""
     silver_source_dir = get_silver_output_dir(run_date, silver_dir)
     out_dir = get_gold_output_dir(run_date, gold_dir)
 
@@ -344,5 +350,5 @@ def run_gold_transform(run_date: str, silver_dir: str = SILVER_DIR, gold_dir: st
 
         return [{"table_name": name, "status": "success"} for name in tables]
     except Exception as error:  # noqa: BLE001 -- any failure anywhere in this interdependent chain aborts the whole Gold batch
-        _logger.error("Gold layer transform thất bại: %s", error)
+        get_logger(batch_id or str(uuid.uuid4())).error("Gold layer transform thất bại: %s", error)
         return [{"table_name": "gold_layer", "status": "failed", "error": str(error)}]

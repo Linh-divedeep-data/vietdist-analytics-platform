@@ -67,9 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.layer == "bronze":
         records = run_bronze_ingestion(run_date, batch_id)
     elif args.layer == "silver":
-        records = run_silver_transform(run_date)
+        records = run_silver_transform(run_date, batch_id=batch_id)
     elif args.layer == "gold":
-        records = run_gold_transform(run_date)
+        records = run_gold_transform(run_date, batch_id=batch_id)
     exit_code = _check_layer_results(records, layer_name=args.layer, batch_id=batch_id)
     logger.info("pipeline run finished")
     return exit_code
