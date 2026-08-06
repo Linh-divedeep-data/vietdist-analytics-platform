@@ -69,6 +69,19 @@ def build_dim_date(sales_silver_df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+def add_scd2_valid_dates(silver_df: pl.DataFrame) -> pl.DataFrame:
+    """Add valid_from/valid_to for SCD2 employee versioning.
+    valid_to = next version's effective_date if one exists, else resign_date (NULL if still active) —
+    a resigned employee's last version must NOT read as valid forever."""
+    sorted_df = silver_df.sort(["employee_id", "effective_date"])
+    next_effective_date = pl.col("effective_date").shift(-1).over("employee_id")
+
+    return sorted_df.with_columns(
+        pl.col("effective_date").alias("valid_from"),
+        pl.coalesce([next_effective_date, pl.col("resign_date")]).alias("valid_to"),
+    )
+
+
 def add_is_current_flag(df: pl.DataFrame) -> pl.DataFrame:
     """Flag the current version per employee. valid_to is already coalesced with resign_date
     (see add_scd2_valid_dates), so is_current only needs valid_to.is_null() — checking
