@@ -80,3 +80,10 @@ def add_scd2_valid_dates(silver_df: pl.DataFrame) -> pl.DataFrame:
         pl.col("effective_date").alias("valid_from"),
         pl.coalesce([next_effective_date, pl.col("resign_date")]).alias("valid_to"),
     )
+
+
+def add_is_current_flag(df: pl.DataFrame) -> pl.DataFrame:
+    """Flag the current version per employee. valid_to is already coalesced with resign_date
+    (see add_scd2_valid_dates), so is_current only needs valid_to.is_null() — checking
+    resign_date separately would be a second source of truth for the same conclusion."""
+    return df.with_columns(pl.col("valid_to").is_null().alias("is_current"))
