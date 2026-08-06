@@ -182,36 +182,45 @@ def write_silver_log(record: dict, out_dir: str) -> str:
     new_row = pl.DataFrame([record], schema_overrides={"error_message": pl.Utf8})
 
     if os.path.exists(path):
-        existing = pl.read_parquet(path).with_columns(pl.col("error_message").cast(pl.Utf8))
-        combined = pl.concat([existing, new_row], how="vertical")
+        existing = pl.scan_parquet(path).with_columns(pl.col("error_message").cast(pl.Utf8))
+        combined = pl.concat([existing, new_row.lazy()], how="vertical")
     else:
-        combined = new_row
+        combined = new_row.lazy()
 
-    combined.write_parquet(path)
+    combined.collect().write_parquet(path)
     return path
 
 
-def transform_source_with_stats(df: pl.DataFrame, source_file: str) -> tuple[pl.DataFrame, dict]:
+def transform_source_with_stats(
+    df: pl.DataFrame | pl.LazyFrame, source_file: str
+) -> tuple[pl.DataFrame, dict]:
     """Run one source through the full 6-step Silver cleaning pipeline, also
     returning row_count_in/out, dedup_count, and null_count for logging
-    (VDAP-419) — real counts computed from df.height deltas, never hardcoded."""
-    row_count_in = df.height
-    validate_required_columns(df, source_file)
+    (VDAP-419) — real counts computed from row-count deltas, never hardcoded.
+    Runs Lazy internally regardless of input type (VDAP-384), collecting once
+    at the end so the returned DataFrame is always eager, ready for
+    write_silver_parquet()."""
+    lazy_df = df.lazy() if isinstance(df, pl.DataFrame) else df
 
-    result = cast_money_and_qty_columns(df, MONEY_QTY_COLUMNS[source_file])
+    row_count_in = _row_count(lazy_df)
+    validate_required_columns(lazy_df, source_file)
+
+    result = cast_money_and_qty_columns(lazy_df, MONEY_QTY_COLUMNS[source_file])
     result = cast_date_columns(result, DATE_COLUMNS[source_file], source_file)
     result = standardize_text_columns(result, TEXT_COLUMNS[source_file])
 
-    before_dedup = result.height
+    before_dedup = _row_count(result)
     result = drop_duplicate_rows(result)
-    dedup_count = before_dedup - result.height
+    dedup_count = before_dedup - _row_count(result)
 
-    before_null_drop = result.height
+    before_null_drop = _row_count(result)
     result = drop_null_key_rows(result, KEY_COLUMNS[source_file])
-    null_count = before_null_drop - result.height
+    null_count = before_null_drop - _row_count(result)
 
     if source_file == "SRC03_customer_master.csv":
         result = fill_null_columns(result, ["tax_code"], "UNKNOWN")
+
+    result = result.collect() if isinstance(result, pl.LazyFrame) else result
 
     stats = {
         "row_count_in": row_count_in,
@@ -260,8 +269,8 @@ def run_silver_transform(
         error_message = None
 
         try:
-            df = pl.read_parquet(os.path.join(bronze_date_dir, f"{source_name}.parquet"))
-            row_count_in = df.height
+            df = pl.scan_parquet(os.path.join(bronze_date_dir, f"{source_name}.parquet"))
+            row_count_in = _row_count(df)
             result, stats = transform_source_with_stats(df, source_file)
             row_count_out = stats["row_count_out"]
             dedup_count = stats["dedup_count"]
