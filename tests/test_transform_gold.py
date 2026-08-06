@@ -13,6 +13,7 @@ from src.transform_gold import (
     build_dim_employees,
     build_dim_products,
     build_fact_sales,
+    build_fact_targets,
     dedupe_by_business_key,
     drop_lineage_columns,
     drop_pii_columns,
@@ -566,3 +567,40 @@ def test_build_fact_sales_resolves_all_fks_with_no_nulls():
 
     assert rows["O4"]["product_key"] == -1  # PRD9999 không tồn tại
     assert rows["O4"]["employee_key"] == -1  # EMP999 không tồn tại trong dim_employees
+
+
+def test_build_fact_targets_resolves_employee_key_keeps_year_month_no_date_key():
+    dim_employees = build_dim_employees(
+        pl.DataFrame(
+            {
+                "employee_id": ["EMP001", "EMP001"],
+                "version": ["v1", "v2"],
+                "effective_date": [date(2024, 1, 1), date(2024, 6, 1)],
+                "resign_date": [None, None],
+            }
+        )
+    )
+    targets = pl.DataFrame(
+        {
+            "employee_id": ["EMP001", "EMP001", "EMP999"],
+            "region": ["North", "South", "East"],
+            "year": [2024, 2024, 2024],
+            "month": [2, 7, 3],
+            "target_revenue": [1000.0, 2000.0, 500.0],
+        }
+    )
+
+    result = build_fact_targets(targets, dim_employees)
+
+    assert result.height == targets.height
+    assert "date_key" not in result.columns
+    assert "_target_date" not in result.columns
+    assert result["employee_key"].null_count() == 0
+
+    rows = {(r["employee_id"], r["month"]): r for r in result.to_dicts()}
+    assert rows[("EMP001", 2)]["employee_key"] == 1  # tháng 2, còn ở version v1
+    assert rows[("EMP001", 7)]["employee_key"] == 2  # tháng 7, đã đổi sang version v2
+    assert rows[("EMP999", 3)]["employee_key"] == -1  # employee_id không tồn tại
+    # year/month giữ nguyên giá trị gốc, không bị đổi kiểu hay giá trị
+    assert rows[("EMP001", 2)]["year"] == 2024
+    assert rows[("EMP001", 2)]["target_revenue"] == 1000.0
