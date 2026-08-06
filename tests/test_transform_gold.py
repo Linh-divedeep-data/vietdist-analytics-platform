@@ -9,6 +9,7 @@ from src.transform_gold import (
     build_dim_customers,
     build_dim_date,
     build_dim_distributors,
+    build_dim_employees,
     build_dim_products,
     dedupe_by_business_key,
     drop_lineage_columns,
@@ -282,3 +283,32 @@ def test_add_is_current_flag_false_for_last_version_of_resigned_employee():
     result = add_is_current_flag(df)
 
     assert result["is_current"].to_list() == [False]
+
+
+def test_build_dim_employees_chains_scd2_dates_flag_and_surrogate_key():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001", "EMP001", "EMP002"],
+            "version": ["v1", "v2", "v1"],
+            "effective_date": [date(2024, 1, 1), date(2024, 6, 1), date(2024, 1, 1)],
+            "resign_date": [None, None, date(2024, 9, 30)],
+            "_batch_id": ["batch-1", "batch-1", "batch-1"],
+        }
+    )
+
+    result = build_dim_employees(df)
+
+    assert "_batch_id" not in result.columns
+    assert result.columns[0] == "employee_key"
+    assert result["employee_key"].to_list() == [1, 2, 3]
+
+    rows = {(r["employee_id"], r["version"]): r for r in result.to_dicts()}
+    # EMP001 v1: không phải version cuối -> valid_to = effective_date của v2, không phải current
+    assert rows[("EMP001", "v1")]["valid_to"] == date(2024, 6, 1)
+    assert rows[("EMP001", "v1")]["is_current"] is False
+    # EMP001 v2: version cuối, đang làm (resign_date NULL) -> valid_to NULL, đang current
+    assert rows[("EMP001", "v2")]["valid_to"] is None
+    assert rows[("EMP001", "v2")]["is_current"] is True
+    # EMP002 v1: version cuối, đã nghỉ -> valid_to = resign_date, KHÔNG current
+    assert rows[("EMP002", "v1")]["valid_to"] == date(2024, 9, 30)
+    assert rows[("EMP002", "v1")]["is_current"] is False
