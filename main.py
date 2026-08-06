@@ -1,10 +1,4 @@
-"""Pipeline entrypoint (Sprint 0 skeleton, VDAP-236/VDAP-242).
-
-Epic 1 will replace _run_placeholder_layer with the real
-src.extract.orchestrator.run_bronze_ingestion() (and its silver/gold
-equivalents) — batch_id and the records-in/exit-code-out contract are
-already wired here so that swap won't need to touch this file's control
-flow.
+"""Pipeline entrypoint (Sprint 0 skeleton, VDAP-236/VDAP-242; Bronze wired in VDAP-325).
 
 Hook point for real alerting (VDAP-242, out of scope for this ticket —
 no webhook/SMTP available to test against in this capstone):
@@ -13,19 +7,26 @@ no webhook/SMTP available to test against in this capstone):
         send_alert(...)  # e.g. Slack/email webhook, not implemented here
 """
 
+import argparse
 import sys
 import uuid
+from datetime import UTC, datetime
 
+from src.extract.orchestrator import run_bronze_ingestion
 from src.logger import get_logger
+from src.transform_silver import run_silver_transform
 
 
-def _run_placeholder_layer(batch_id: str) -> list[dict]:
-    logger = get_logger(batch_id)
-    logger.info("placeholder layer running")
-    return [{"source": "placeholder", "status": "success"}]
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """Parse CLI args: required --layer, optional --run-date (defaults to today)."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--layer", choices=["bronze", "silver"], required=True)
+    parser.add_argument("--run-date", required=False, default=None)
+    return parser.parse_args(argv)
 
 
 def _check_layer_results(records: list[dict], layer_name: str, batch_id: str) -> int:
+    """Log a summary for one layer's run and return the process exit code."""
     logger = get_logger(batch_id)
     total = len(records)
     failed = [r for r in records if r.get("status") != "success"]
@@ -43,12 +44,18 @@ def _check_layer_results(records: list[dict], layer_name: str, batch_id: str) ->
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Parse CLI args, run the pipeline once with a fresh batch_id, and return the process exit code."""
+    args = _parse_args(argv)
     batch_id = str(uuid.uuid4())
+    run_date = args.run_date or datetime.now(UTC).date().isoformat()
     logger = get_logger(batch_id)
     logger.info("pipeline run started")
-    records = _run_placeholder_layer(batch_id)
-    exit_code = _check_layer_results(records, layer_name="bronze", batch_id=batch_id)
+    if args.layer == "bronze":
+        records = run_bronze_ingestion(run_date, batch_id)
+    elif args.layer == "silver":
+        records = run_silver_transform(run_date)
+    exit_code = _check_layer_results(records, layer_name=args.layer, batch_id=batch_id)
     logger.info("pipeline run finished")
     return exit_code
 

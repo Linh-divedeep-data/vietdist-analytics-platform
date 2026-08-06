@@ -3,6 +3,7 @@ import logging
 import polars as pl
 import pytest
 
+from config.sources import REQUIRED_COLUMNS
 from src.extract import parser
 
 
@@ -151,3 +152,51 @@ def test_read_excel_source_reraises_import_error_with_install_hint(monkeypatch):
 
     with pytest.raises(ImportError, match="uv add fastexcel"):
         parser.read_excel_source("SRC02_target.xlsx", raw_dir="data/raw")
+
+
+def test_validate_schema_passes_when_all_required_columns_present():
+    df = pl.DataFrame(
+        {col: ["x"] for col in REQUIRED_COLUMNS["SRC03_customer_master.csv"]}
+    )
+
+    parser.validate_schema(df, "SRC03_customer_master.csv")  # must not raise
+
+
+def test_validate_schema_raises_schema_mismatch_error_when_column_missing():
+    columns = REQUIRED_COLUMNS["SRC03_customer_master.csv"].copy()
+    columns.remove("phone")
+    df = pl.DataFrame({col: ["x"] for col in columns})
+
+    with pytest.raises(parser.SchemaMismatchError) as exc_info:
+        parser.validate_schema(df, "SRC03_customer_master.csv")
+
+    error = exc_info.value
+    assert error.source_file == "SRC03_customer_master.csv"
+    assert error.missing_cols == ["phone"]
+    assert "phone" in str(error)
+    assert "SRC03_customer_master.csv" in str(error)
+
+
+def test_validate_schema_logs_warning_and_does_not_raise_on_extra_column(caplog):
+    df = pl.DataFrame(
+        {col: ["x"] for col in REQUIRED_COLUMNS["SRC03_customer_master.csv"]}
+    )
+    df = df.with_columns(pl.lit("y").alias("unexpected_extra_col"))
+
+    with caplog.at_level(logging.WARNING):
+        parser.validate_schema(df, "SRC03_customer_master.csv")  # must not raise
+
+    assert "unexpected_extra_col" in caplog.text
+
+
+def test_validate_schema_raises_on_missing_even_with_extra_column(caplog):
+    columns = REQUIRED_COLUMNS["SRC03_customer_master.csv"].copy()
+    columns.remove("phone")
+    df = pl.DataFrame({col: ["x"] for col in columns})
+    df = df.with_columns(pl.lit("y").alias("unexpected_extra_col"))
+
+    with caplog.at_level(logging.WARNING), pytest.raises(parser.SchemaMismatchError) as exc_info:
+        parser.validate_schema(df, "SRC03_customer_master.csv")
+
+    assert exc_info.value.missing_cols == ["phone"]
+    assert "unexpected_extra_col" in caplog.text
