@@ -87,3 +87,12 @@ def add_is_current_flag(df: pl.DataFrame) -> pl.DataFrame:
     (see add_scd2_valid_dates), so is_current only needs valid_to.is_null() — checking
     resign_date separately would be a second source of truth for the same conclusion."""
     return df.with_columns(pl.col("valid_to").is_null().alias("is_current"))
+
+
+def build_dim_employees(silver_df: pl.DataFrame) -> pl.DataFrame:
+    """Build dim_employees (SCD2): drop lineage columns, compute valid_from/valid_to + is_current,
+    add employee_key (1-based) — 1 employee_id may have several employee_key, one per version."""
+    result = drop_lineage_columns(silver_df)
+    result = add_scd2_valid_dates(result)
+    result = add_is_current_flag(result)
+    return add_surrogate_key(result, "employee_key")
