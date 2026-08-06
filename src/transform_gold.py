@@ -262,3 +262,16 @@ def build_mart_sales_vs_target(fact_sales_df: pl.DataFrame, fact_targets_df: pl.
         pl.col("target_revenue").sum().alias("target_revenue")
     )
     return actual.join(target, on=["region", "year", "month"], how="full", coalesce=True)
+
+
+def add_variance_pct(mart_df: pl.DataFrame) -> pl.DataFrame:
+    """Add variance_pct = (actual_revenue - target_revenue) / target_revenue. Guards target_revenue
+    NULL or 0 -> variance_pct NULL, short-circuited via pl.when so the division by zero never
+    actually executes (no Inf/NaN, no crash) — a region with no target set yet must not sink the
+    whole report."""
+    return mart_df.with_columns(
+        pl.when(pl.col("target_revenue").is_null() | (pl.col("target_revenue") == 0))
+        .then(None)
+        .otherwise((pl.col("actual_revenue") - pl.col("target_revenue")) / pl.col("target_revenue"))
+        .alias("variance_pct")
+    )
