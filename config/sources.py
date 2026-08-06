@@ -164,3 +164,9 @@ DATE_FORMAT_BY_SOURCE: dict[str, str] = {
     "SRC09_return_transactions.csv": "%Y-%m-%d",
     "SRC10_promotion_program.xlsx": "%Y-%m-%d",
 }
+
+PII_COLUMNS_TO_DROP: dict[str, list[str]] = {
+    "dim_customers": ["address", "phone", "tax_code"],
+    "dim_distributors": ["phone", "tax_code"],
+    "dim_employees": ["phone", "date_of_birth"],
+}

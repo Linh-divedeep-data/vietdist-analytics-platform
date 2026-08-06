@@ -4,6 +4,8 @@ import logging
 
 import polars as pl
 
+from config.sources import PII_COLUMNS_TO_DROP
+
 _logger = logging.getLogger(__name__)
 
 _LINEAGE_COLUMNS = ["_source_file", "_source_platform", "_run_date", "_ingested_at", "_batch_id"]
@@ -51,6 +53,11 @@ def add_unknown_member(
 
     unknown_row = pl.DataFrame([unknown_values], schema=df.schema)
     return pl.concat([unknown_row, df])
+
+
+def drop_pii_columns(df: pl.DataFrame, dim_name: str) -> pl.DataFrame:
+    """Drop this Dim's configured PII columns (phone/address/tax_code/date_of_birth) before Gold write."""
+    return df.drop(PII_COLUMNS_TO_DROP[dim_name], strict=False)
 
 
 def build_dim_customers(silver_df: pl.DataFrame) -> pl.DataFrame:
