@@ -369,9 +369,10 @@ def test_build_dim_employees_chains_scd2_dates_flag_and_surrogate_key():
 
     assert "_batch_id" not in result.columns
     assert result.columns[0] == "employee_key"
-    assert result["employee_key"].to_list() == [1, 2, 3]
+    real_rows = result.filter(pl.col("employee_key") != -1)
+    assert real_rows["employee_key"].to_list() == [1, 2, 3]
 
-    rows = {(r["employee_id"], r["version"]): r for r in result.to_dicts()}
+    rows = {(r["employee_id"], r["version"]): r for r in real_rows.to_dicts()}
     # EMP001 v1: không phải version cuối -> valid_to = effective_date của v2, không phải current
     assert rows[("EMP001", "v1")]["valid_to"] == date(2024, 6, 1)
     assert rows[("EMP001", "v1")]["is_current"] is False
@@ -381,3 +382,26 @@ def test_build_dim_employees_chains_scd2_dates_flag_and_surrogate_key():
     # EMP002 v1: version cuối, đã nghỉ -> valid_to = resign_date, KHÔNG current
     assert rows[("EMP002", "v1")]["valid_to"] == date(2024, 9, 30)
     assert rows[("EMP002", "v1")]["is_current"] is False
+
+
+def test_build_dim_employees_unknown_member_has_is_current_false_not_null():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "version": ["v1"],
+            "effective_date": [date(2024, 1, 1)],
+            "resign_date": [None],
+        }
+    )
+
+    result = build_dim_employees(df)
+
+    unknown_rows = result.filter(pl.col("employee_key") == -1)
+    assert unknown_rows.height == 1
+    unknown_row = unknown_rows.row(0, named=True)
+    assert unknown_row["employee_id"] == "UNKNOWN"
+    assert unknown_row["valid_from"] is None
+    assert unknown_row["valid_to"] is None
+    # Must be False, not null — a null is_current would break any dashboard/report
+    # filter that does filter(pl.col("is_current")) expecting a plain boolean.
+    assert unknown_row["is_current"] is False
