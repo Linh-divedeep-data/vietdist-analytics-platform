@@ -5,8 +5,9 @@ import os
 
 import polars as pl
 
-from config.settings import GOLD_DIR
+from config.settings import GOLD_DIR, SILVER_DIR
 from config.sources import PII_COLUMNS_TO_DROP
+from src.transform_silver import get_silver_output_dir
 
 _logger = logging.getLogger(__name__)
 
@@ -291,3 +292,57 @@ def write_gold_parquet(df: pl.DataFrame, table_name: str, out_dir: str) -> str:
     path = os.path.join(out_dir, f"{table_name}.parquet")
     df.write_parquet(path)
     return path
+
+
+def run_gold_transform(run_date: str, silver_dir: str = SILVER_DIR, gold_dir: str = GOLD_DIR) -> list[dict]:
+    """Build every Dim/Fact/Mart table from Silver output and write them to Gold.
+    Unlike Bronze/Silver (independent per-source loops), Gold's 12 tables form one
+    dependency chain (dims -> facts -> mart) — a failure anywhere aborts the whole
+    batch instead of skipping just one source, reported as a single failed record."""
+    silver_source_dir = get_silver_output_dir(run_date, silver_dir)
+    out_dir = get_gold_output_dir(run_date, gold_dir)
+
+    def read(source_name: str) -> pl.DataFrame:
+        return pl.read_parquet(os.path.join(silver_source_dir, f"{source_name}.parquet"))
+
+    try:
+        dim_customers = build_dim_customers(read("SRC03_customer_master"))
+        dim_products = build_dim_products(read("SRC04_product_master"))
+        dim_distributors = build_dim_distributors(read("SRC06_distributor_master"))
+        dim_territory = build_dim_territory(read("SRC08_territory_mapping"))
+        dim_promotion = build_dim_promotion(read("SRC10_promotion_program"))
+        dim_employees = build_dim_employees(read("SRC07_employee_master"))
+
+        sales_silver = read("SRC01_sales_transactions")
+        dim_date = build_dim_date(sales_silver)
+
+        fact_sales = build_fact_sales(sales_silver, dim_customers, dim_products, dim_employees, dim_date)
+        fact_targets = build_fact_targets(read("SRC02_sales_target_plan"), dim_employees)
+        fact_returns = build_fact_returns(read("SRC09_return_transactions"), dim_customers, dim_products, dim_employees)
+        fact_distributor_orders = build_fact_distributor_orders(
+            read("SRC05_distributor_orders"), dim_distributors, dim_products
+        )
+
+        mart_sales_vs_target = add_variance_pct(build_mart_sales_vs_target(fact_sales, fact_targets))
+
+        tables = {
+            "dim_customers": dim_customers,
+            "dim_products": dim_products,
+            "dim_distributors": dim_distributors,
+            "dim_date": dim_date,
+            "dim_territory": dim_territory,
+            "dim_promotion": dim_promotion,
+            "dim_employees": dim_employees,
+            "fact_sales": fact_sales,
+            "fact_targets": fact_targets,
+            "fact_returns": fact_returns,
+            "fact_distributor_orders": fact_distributor_orders,
+            "mart_sales_vs_target": mart_sales_vs_target,
+        }
+        for table_name, df in tables.items():
+            write_gold_parquet(df, table_name, out_dir)
+
+        return [{"table_name": name, "status": "success"} for name in tables]
+    except Exception as error:  # noqa: BLE001 -- any failure anywhere in this interdependent chain aborts the whole Gold batch
+        _logger.error("Gold layer transform thất bại: %s", error)
+        return [{"table_name": "gold_layer", "status": "failed", "error": str(error)}]
