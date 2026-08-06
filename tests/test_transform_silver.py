@@ -30,6 +30,21 @@ from src.transform_silver import (
 )
 
 
+@pytest.fixture
+def _vietdist_caplog(caplog):
+    """get_logger() sets propagate=False on the "vietdist" logger and attaches
+    its own StreamHandler, so plain caplog.at_level() alone does not capture
+    its records (verified empirically). Attach caplog's handler directly to
+    the named logger, and clean up before/after so no state leaks into other
+    tests (mirrors tests/test_logger.py's _reset_shared_logger fixture)."""
+    logger = logging.getLogger("vietdist")
+    logger.handlers.clear()
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="vietdist")
+    yield caplog
+    logger.handlers.clear()
+
+
 def test_build_silver_log_record_has_exactly_eight_fields_with_correct_values():
     record = build_silver_log_record(
         source_file="SRC01_sales_transactions.csv",
@@ -854,3 +869,89 @@ def test_run_silver_transform_is_idempotent_when_rerun_with_same_run_date(tmp_pa
 
     assert len(first_run_counts) == 10
     assert first_run_counts == second_run_counts
+
+
+def test_run_silver_transform_logs_silver_log_record_for_successful_source(tmp_path, _vietdist_caplog):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert "SRC01_sales_transactions" in _vietdist_caplog.text
+    assert "'status': 'success'" in _vietdist_caplog.text
+    assert "'run_date': '2026-08-04'" in _vietdist_caplog.text
+
+
+def test_run_silver_transform_logs_silver_log_record_for_failed_source(tmp_path, _vietdist_caplog):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    failing_source = "SRC04_product_master.xlsx"
+    df = _minimal_valid_bronze_fixture(failing_source, drop_column="product_id")
+    df.write_parquet(bronze_date_dir / "SRC04_product_master.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert "SRC04_product_master" in _vietdist_caplog.text
+    assert "'status': 'failed'" in _vietdist_caplog.text
+    assert "'error_message': None" not in _vietdist_caplog.text  # a real message was captured
+
+
+def test_run_silver_transform_logs_one_record_per_source(tmp_path, _vietdist_caplog):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert len(_vietdist_caplog.records) == 10
+
+
+def test_run_silver_transform_accepts_optional_batch_id_without_error(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    df = _minimal_valid_bronze_fixture("SRC03_customer_master.csv")
+    df.write_parquet(bronze_date_dir / "SRC03_customer_master.parquet")
+
+    # must not raise when batch_id is explicitly supplied
+    records = run_silver_transform(
+        "2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir), batch_id="explicit-batch-123"
+    )
+
+    customer_master_record = next(r for r in records if r["source_file"] == "SRC03_customer_master.csv")
+    assert customer_master_record["status"] == "success"
+
+
+def test_run_silver_transform_return_value_schema_unchanged(tmp_path):
+    """Locks in that the existing {"source_file","status","error"} return
+    contract (consumed by main.py's exit-code check) did not change shape
+    when silver log records were added."""
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    df = _minimal_valid_bronze_fixture("SRC03_customer_master.csv")
+    df.write_parquet(bronze_date_dir / "SRC03_customer_master.parquet")
+
+    records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert set(records[0].keys()) == {"source_file", "status", "error"}
