@@ -28,6 +28,31 @@ def dedupe_by_business_key(df: pl.DataFrame, key_col: str) -> pl.DataFrame:
     return result
 
 
+def add_unknown_member(
+    df: pl.DataFrame, key_col: str, business_key_col: str, overrides: dict | None = None
+) -> pl.DataFrame:
+    """Prepend a static 'Unknown Member' row (key_col=-1) so a Fact FK that can't resolve a
+    real business key still points at a real Dim row instead of NULL."""
+    overrides = overrides or {}
+    df = df.with_columns(pl.col(key_col).cast(pl.Int64))
+
+    unknown_values = {}
+    for col_name, dtype in df.schema.items():
+        if col_name == key_col:
+            unknown_values[col_name] = -1
+        elif col_name == business_key_col:
+            unknown_values[col_name] = "UNKNOWN"
+        elif col_name in overrides:
+            unknown_values[col_name] = overrides[col_name]
+        elif dtype == pl.Utf8:
+            unknown_values[col_name] = "Unknown"
+        else:
+            unknown_values[col_name] = None
+
+    unknown_row = pl.DataFrame([unknown_values], schema=df.schema)
+    return pl.concat([unknown_row, df])
+
+
 def build_dim_customers(silver_df: pl.DataFrame) -> pl.DataFrame:
     """Build dim_customers: drop lineage columns, dedupe by customer_id, add customer_key (1-based)."""
     result = drop_lineage_columns(silver_df)

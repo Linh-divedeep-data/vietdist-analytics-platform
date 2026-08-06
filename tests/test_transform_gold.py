@@ -6,6 +6,7 @@ from src.transform_gold import (
     add_is_current_flag,
     add_scd2_valid_dates,
     add_surrogate_key,
+    add_unknown_member,
     build_dim_customers,
     build_dim_date,
     build_dim_distributors,
@@ -78,6 +79,44 @@ def test_dedupe_by_business_key_does_not_log_when_no_duplicates(caplog):
 
     assert result.height == 2
     assert caplog.text == ""
+
+
+def test_add_unknown_member_prepends_row_with_key_minus_1_and_infers_unknown_string_default():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS0001", "CUS0002"],
+            "customer_name": ["An", "Binh"],
+        }
+    ).with_row_index(name="customer_key", offset=1)
+
+    result = add_unknown_member(df, "customer_key", "customer_id")
+
+    assert result["customer_key"].to_list() == [-1, 1, 2]
+    assert result.schema["customer_key"] == pl.Int64
+    unknown_row = result.filter(pl.col("customer_key") == -1).row(0, named=True)
+    assert unknown_row["customer_id"] == "UNKNOWN"
+    assert unknown_row["customer_name"] == "Unknown"
+
+
+def test_add_unknown_member_applies_overrides_instead_of_dtype_default():
+    df = pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "valid_from": [date(2024, 1, 1)],
+            "valid_to": [None],
+            "is_current": [True],
+        }
+    ).with_row_index(name="employee_key", offset=1)
+
+    result = add_unknown_member(df, "employee_key", "employee_id", overrides={"is_current": False})
+
+    unknown_row = result.filter(pl.col("employee_key") == -1).row(0, named=True)
+    assert unknown_row["employee_id"] == "UNKNOWN"
+    assert unknown_row["valid_from"] is None
+    assert unknown_row["valid_to"] is None
+    # is_current must be the override (False), NOT the dtype default (None/null) —
+    # a null here would break any downstream filter(pl.col("is_current")) that expects a bool.
+    assert unknown_row["is_current"] is False
 
 
 def test_build_dim_customers_generates_1_based_surrogate_key():
