@@ -28,6 +28,20 @@ from src.logger import get_logger
 _logger = logging.getLogger(__name__)
 
 
+def _row_count(frame: pl.DataFrame | pl.LazyFrame) -> int:
+    """Row count that works for both Eager and Lazy frames without forcing a full materialize."""
+    if isinstance(frame, pl.LazyFrame):
+        return frame.select(pl.len()).collect().item()
+    return frame.height
+
+
+def _null_count(frame: pl.DataFrame | pl.LazyFrame, col: str) -> int:
+    """Null count for one column, Eager or Lazy."""
+    if isinstance(frame, pl.LazyFrame):
+        return frame.select(pl.col(col).null_count()).collect().item()
+    return frame[col].null_count()
+
+
 def build_silver_log_record(
     source_file: str,
     run_date: str,
@@ -75,15 +89,18 @@ def cast_money_and_qty_columns(df: pl.DataFrame, columns: list[str]) -> pl.DataF
     )
 
 
-def cast_date_columns(df: pl.DataFrame, columns: list[str], source_file: str) -> pl.DataFrame:
+def cast_date_columns(
+    df: pl.DataFrame | pl.LazyFrame, columns: list[str], source_file: str
+) -> pl.DataFrame | pl.LazyFrame:
     """Cast date columns to pl.Date using DATE_FORMAT_BY_SOURCE, logging the post-parse NULL ratio per column."""
     fmt = DATE_FORMAT_BY_SOURCE[source_file]
     result = df.with_columns(
         pl.col(col).str.strptime(pl.Date, fmt, strict=False) for col in columns
     )
 
+    total = _row_count(result)
     for col in columns:
-        null_ratio = result[col].null_count() / result.height
+        null_ratio = _null_count(result, col) / total
         if null_ratio > 0.5:
             _logger.warning(
                 "%s.%s: %.0f%% NULL sau khi parse ngày (format=%s) — nghi lệch format, không phải data rác thật",
@@ -116,11 +133,13 @@ def drop_duplicate_rows(df: pl.DataFrame) -> pl.DataFrame:
     return df.unique(maintain_order=True)
 
 
-def drop_null_key_rows(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+def drop_null_key_rows(
+    df: pl.DataFrame | pl.LazyFrame, columns: list[str]
+) -> pl.DataFrame | pl.LazyFrame:
     """Drop rows where any of the given primary-key columns is NULL, logging the dropped row count."""
     result = df.filter(pl.all_horizontal(pl.col(col).is_not_null() for col in columns))
 
-    dropped = df.height - result.height
+    dropped = _row_count(df) - _row_count(result)
     if dropped > 0:
         _logger.info("Loại %d dòng NULL ở cột khóa %s", dropped, columns)
 
@@ -163,36 +182,45 @@ def write_silver_log(record: dict, out_dir: str) -> str:
     new_row = pl.DataFrame([record], schema_overrides={"error_message": pl.Utf8})
 
     if os.path.exists(path):
-        existing = pl.read_parquet(path).with_columns(pl.col("error_message").cast(pl.Utf8))
-        combined = pl.concat([existing, new_row], how="vertical")
+        existing = pl.scan_parquet(path).with_columns(pl.col("error_message").cast(pl.Utf8))
+        combined = pl.concat([existing, new_row.lazy()], how="vertical")
     else:
-        combined = new_row
+        combined = new_row.lazy()
 
-    combined.write_parquet(path)
+    combined.collect().write_parquet(path)
     return path
 
 
-def transform_source_with_stats(df: pl.DataFrame, source_file: str) -> tuple[pl.DataFrame, dict]:
+def transform_source_with_stats(
+    df: pl.DataFrame | pl.LazyFrame, source_file: str
+) -> tuple[pl.DataFrame, dict]:
     """Run one source through the full 6-step Silver cleaning pipeline, also
     returning row_count_in/out, dedup_count, and null_count for logging
-    (VDAP-419) — real counts computed from df.height deltas, never hardcoded."""
-    row_count_in = df.height
-    validate_required_columns(df, source_file)
+    (VDAP-419) — real counts computed from row-count deltas, never hardcoded.
+    Runs Lazy internally regardless of input type (VDAP-384), collecting once
+    at the end so the returned DataFrame is always eager, ready for
+    write_silver_parquet()."""
+    lazy_df = df.lazy() if isinstance(df, pl.DataFrame) else df
 
-    result = cast_money_and_qty_columns(df, MONEY_QTY_COLUMNS[source_file])
+    row_count_in = _row_count(lazy_df)
+    validate_required_columns(lazy_df, source_file)
+
+    result = cast_money_and_qty_columns(lazy_df, MONEY_QTY_COLUMNS[source_file])
     result = cast_date_columns(result, DATE_COLUMNS[source_file], source_file)
     result = standardize_text_columns(result, TEXT_COLUMNS[source_file])
 
-    before_dedup = result.height
+    before_dedup = _row_count(result)
     result = drop_duplicate_rows(result)
-    dedup_count = before_dedup - result.height
+    dedup_count = before_dedup - _row_count(result)
 
-    before_null_drop = result.height
+    before_null_drop = _row_count(result)
     result = drop_null_key_rows(result, KEY_COLUMNS[source_file])
-    null_count = before_null_drop - result.height
+    null_count = before_null_drop - _row_count(result)
 
     if source_file == "SRC03_customer_master.csv":
         result = fill_null_columns(result, ["tax_code"], "UNKNOWN")
+
+    result = result.collect() if isinstance(result, pl.LazyFrame) else result
 
     stats = {
         "row_count_in": row_count_in,
@@ -241,8 +269,8 @@ def run_silver_transform(
         error_message = None
 
         try:
-            df = pl.read_parquet(os.path.join(bronze_date_dir, f"{source_name}.parquet"))
-            row_count_in = df.height
+            df = pl.scan_parquet(os.path.join(bronze_date_dir, f"{source_name}.parquet"))
+            row_count_in = _row_count(df)
             result, stats = transform_source_with_stats(df, source_file)
             row_count_out = stats["row_count_out"]
             dedup_count = stats["dedup_count"]
