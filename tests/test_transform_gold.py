@@ -7,6 +7,7 @@ from src.transform_gold import (
     add_scd2_valid_dates,
     add_surrogate_key,
     add_unknown_member,
+    add_variance_pct,
     build_dim_customers,
     build_dim_date,
     build_dim_distributors,
@@ -844,3 +845,32 @@ def test_build_mart_sales_vs_target_aggregates_actual_and_target_by_region_year_
     assert trung["target_revenue"] == 500.0
 
     assert result.height == 4
+
+
+def test_add_variance_pct_guards_zero_and_null_target_no_inf_no_crash():
+    mart = pl.DataFrame(
+        {
+            "region": ["MIỀN BẮC", "MIỀN NAM", "MIỀN TRUNG"],
+            "year": ["2024", "2024", "2024"],
+            "month": ["1", "1", "1"],
+            "actual_revenue": [150.0, 80.0, 30.0],
+            "target_revenue": [100.0, 0.0, None],
+        }
+    )
+
+    result = add_variance_pct(mart)
+
+    rows = {r["region"]: r for r in result.to_dicts()}
+
+    # trường hợp thường: (150-100)/100 = 0.5
+    assert rows["MIỀN BẮC"]["variance_pct"] == 0.5
+
+    # target_revenue = 0 -> NULL, không phải Inf
+    assert rows["MIỀN NAM"]["variance_pct"] is None
+
+    # target_revenue = NULL (chưa set target) -> NULL, không crash
+    assert rows["MIỀN TRUNG"]["variance_pct"] is None
+
+    # AC: không dòng nào Inf/NaN
+    variance_values = result["variance_pct"].drop_nulls().to_list()
+    assert all(v not in (float("inf"), float("-inf")) and v == v for v in variance_values)
