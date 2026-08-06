@@ -14,6 +14,7 @@ from src.transform_gold import (
     build_dim_products,
     build_dim_promotion,
     build_dim_territory,
+    build_fact_distributor_orders,
     build_fact_sales,
     build_fact_targets,
     dedupe_by_business_key,
@@ -569,6 +570,42 @@ def test_build_fact_sales_resolves_all_fks_with_no_nulls():
 
     assert rows["O4"]["product_key"] == -1  # PRD9999 không tồn tại
     assert rows["O4"]["employee_key"] == -1  # EMP999 không tồn tại trong dim_employees
+
+
+def test_build_fact_distributor_orders_resolves_fks_no_nulls_no_fanout():
+    dim_distributors = build_dim_distributors(
+        pl.DataFrame({"distributor_id": ["DIST001", "DIST002"], "distributor_name": ["An Phu", "Binh Minh"]})
+    )
+    dim_products = build_dim_products(
+        pl.DataFrame({"product_id": ["PRD0001", "PRD0002"], "product_name": ["Sữa", "Bánh"]})
+    )
+    distributor_orders = pl.DataFrame(
+        {
+            "order_id": ["DORD001", "DORD002", "DORD003"],
+            "distributor_id": ["DIST001", "DIST002", "DIST999"],
+            "product_id": ["PRD0001", "PRD9999", "PRD0002"],
+            "fill_rate_pct": [95.0, 80.0, 100.0],
+            "ontime_delivery": ["Yes", "No", "Yes"],
+        }
+    )
+
+    result = build_fact_distributor_orders(distributor_orders, dim_distributors, dim_products)
+
+    assert result.height == distributor_orders.height
+    fk_cols = ["distributor_key", "product_key"]
+    assert result.select(fk_cols).null_count().sum_horizontal().sum() == 0
+
+    rows = {r["order_id"]: r for r in result.to_dicts()}
+    assert rows["DORD001"]["distributor_key"] == 1
+    assert rows["DORD001"]["product_key"] == 1
+    assert rows["DORD002"]["distributor_key"] == 2
+    assert rows["DORD002"]["product_key"] == -1  # PRD9999 không tồn tại
+    assert rows["DORD003"]["distributor_key"] == -1  # DIST999 không tồn tại
+    assert rows["DORD003"]["product_key"] == 2
+
+    # đo lường giữ nguyên, không bị join làm rớt
+    assert rows["DORD001"]["fill_rate_pct"] == 95.0
+    assert rows["DORD002"]["ontime_delivery"] == "No"
 
 
 def test_build_fact_targets_resolves_employee_key_keeps_year_month_no_date_key():
