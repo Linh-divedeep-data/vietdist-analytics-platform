@@ -1,3 +1,4 @@
+import os
 from datetime import date
 
 import polars as pl
@@ -23,7 +24,9 @@ from src.transform_gold import (
     dedupe_by_business_key,
     drop_lineage_columns,
     drop_pii_columns,
+    get_gold_output_dir,
     join_employee_asof,
+    write_gold_parquet,
 )
 
 
@@ -874,3 +877,39 @@ def test_add_variance_pct_guards_zero_and_null_target_no_inf_no_crash():
     # AC: không dòng nào Inf/NaN
     variance_values = result["variance_pct"].drop_nulls().to_list()
     assert all(v not in (float("inf"), float("-inf")) and v == v for v in variance_values)
+
+
+def test_get_gold_output_dir_strips_dashes_from_run_date(tmp_path):
+    out_dir = get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+    assert out_dir == os.path.join(str(tmp_path), "20260722")
+
+
+def test_get_gold_output_dir_creates_directory_on_disk(tmp_path):
+    out_dir = get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+    assert os.path.isdir(out_dir)
+
+
+def test_get_gold_output_dir_does_not_raise_when_directory_already_exists(tmp_path):
+    get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+    # must not raise on the second call even though the directory already exists
+    get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+
+def test_write_gold_parquet_creates_file_named_after_table(tmp_path):
+    df = pl.DataFrame({"customer_key": [-1, 1, 2]})
+
+    path = write_gold_parquet(df, "dim_customers", str(tmp_path))
+
+    assert path == os.path.join(str(tmp_path), "dim_customers.parquet")
+    assert os.path.exists(path)
+
+
+def test_write_gold_parquet_row_count_matches(tmp_path):
+    df = pl.DataFrame({"customer_key": [-1, 1, 2, 3]})
+
+    path = write_gold_parquet(df, "dim_customers", str(tmp_path))
+
+    assert pl.read_parquet(path).height == 4

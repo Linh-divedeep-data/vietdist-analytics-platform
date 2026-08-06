@@ -1,9 +1,11 @@
 """Gold transform entrypoints (Epic Phase 3, VDAP-368) — dim_customers/dim_products build."""
 
 import logging
+import os
 
 import polars as pl
 
+from config.settings import GOLD_DIR
 from config.sources import PII_COLUMNS_TO_DROP
 
 _logger = logging.getLogger(__name__)
@@ -275,3 +277,17 @@ def add_variance_pct(mart_df: pl.DataFrame) -> pl.DataFrame:
         .otherwise((pl.col("actual_revenue") - pl.col("target_revenue")) / pl.col("target_revenue"))
         .alias("variance_pct")
     )
+
+
+def get_gold_output_dir(run_date: str, gold_dir: str = GOLD_DIR) -> str:
+    """Return (creating if needed) the Gold output directory for a run_date."""
+    out_dir = os.path.join(gold_dir, run_date.replace("-", ""))
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
+
+
+def write_gold_parquet(df: pl.DataFrame, table_name: str, out_dir: str) -> str:
+    """Write a built Gold table (Dim/Fact/Mart) to out_dir/<table_name>.parquet."""
+    path = os.path.join(out_dir, f"{table_name}.parquet")
+    df.write_parquet(path)
+    return path

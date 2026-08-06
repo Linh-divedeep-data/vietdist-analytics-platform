@@ -14,6 +14,7 @@ from config.sources import (
 )
 from src.extract.parser import SchemaMismatchError
 from src.transform_silver import (
+    build_silver_log_record,
     cast_date_columns,
     cast_money_and_qty_columns,
     drop_duplicate_rows,
@@ -23,9 +24,93 @@ from src.transform_silver import (
     run_silver_transform,
     standardize_text_columns,
     transform_source,
+    transform_source_with_stats,
     validate_required_columns,
+    write_silver_log,
     write_silver_parquet,
 )
+
+
+@pytest.fixture
+def _vietdist_caplog(caplog):
+    """get_logger() sets propagate=False on the "vietdist" logger and attaches
+    its own StreamHandler, so plain caplog.at_level() alone does not capture
+    its records (verified empirically). Attach caplog's handler directly to
+    the named logger, and clean up before/after so no state leaks into other
+    tests (mirrors tests/test_logger.py's _reset_shared_logger fixture)."""
+    logger = logging.getLogger("vietdist")
+    logger.handlers.clear()
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="vietdist")
+    yield caplog
+    logger.handlers.clear()
+
+
+def test_build_silver_log_record_has_exactly_eight_fields_with_correct_values():
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=100,
+        row_count_out=95,
+        null_count=3,
+        dedup_count=2,
+        status="success",
+    )
+
+    assert record == {
+        "source_name": "SRC01_sales_transactions",
+        "run_date": "2026-08-04",
+        "row_count_in": 100,
+        "row_count_out": 95,
+        "null_count": 3,
+        "dedup_count": 2,
+        "status": "success",
+        "error_message": None,
+    }
+
+
+def test_build_silver_log_record_no_batch_id_field():
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=1,
+        row_count_out=1,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    assert "batch_id" not in record
+
+
+def test_build_silver_log_record_source_name_strips_only_last_extension():
+    record = build_silver_log_record(
+        source_file="SRC01.sales.v2.csv",
+        run_date="2026-08-04",
+        row_count_in=1,
+        row_count_out=1,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    assert record["source_name"] == "SRC01.sales.v2"
+
+
+def test_build_silver_log_record_carries_explicit_error_message_on_failure():
+    record = build_silver_log_record(
+        source_file="SRC04_product_master.xlsx",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=0,
+        null_count=0,
+        dedup_count=0,
+        status="failed",
+        error_message="thiếu cột bắt buộc ['product_id']",
+    )
+
+    assert record["status"] == "failed"
+    assert record["error_message"] == "thiếu cột bắt buộc ['product_id']"
 
 
 def test_validate_required_columns_passes_when_all_required_columns_present():
@@ -458,6 +543,130 @@ def test_write_silver_parquet_ten_sources_produce_ten_files_in_same_dir(tmp_path
     assert set(written) == {f"{name}.parquet" for name in source_names}
 
 
+def test_transform_source_with_stats_reports_real_row_count_in_and_out():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS001", "CUS002", "CUS003"],
+            "customer_name": ["Nguyen Van A", "Nguyen Van A", "Tran Thi B", "Le Van C"],
+            "customer_type": ["retail", "retail", "wholesale", "retail"],
+            "channel": ["Modern Trade", "Modern Trade", "Traditional Trade", "Modern Trade"],
+            "province": ["TP.HCM", "TP.HCM", "Ha Noi", "Da Nang"],
+            "region": ["mien nam", "mien nam", "mien bac", "mien trung"],
+            "address": ["123 Le Loi", "123 Le Loi", "456 Tran Phu", "789 Hung Vuong"],
+            "phone": ["0900000001", "0900000001", "0900000002", "0900000003"],
+            "tax_code": ["TAX001", "TAX001", "TAX002", None],
+            "join_date": ["2020-01-01", "2020-01-01", "2020-02-01", "2020-03-01"],
+            "credit_limit": ["1,000,000", "1,000,000", "2,000,000", "3,000,000"],
+            "status": ["active", "active", "active", "active"],
+        }
+    )
+    # 4 input rows: row 0/1 are exact duplicates (dedup removes 1),
+    # row 3 has null tax_code (filled, not dropped — tax_code isn't a key column).
+
+    result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["row_count_in"] == 4
+    assert stats["row_count_out"] == result.height
+    assert result.height == 3  # one exact duplicate removed
+
+
+def test_transform_source_with_stats_dedup_count_matches_removed_duplicate_rows():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS001", "CUS002"],
+            "customer_name": ["A", "A", "B"],
+            "customer_type": ["retail", "retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "TP.HCM", "TP.HCM"],
+            "region": ["mien nam", "mien nam", "mien nam"],
+            "address": ["123 Le Loi", "123 Le Loi", "123 Le Loi"],
+            "phone": ["0900000001", "0900000001", "0900000002"],
+            "tax_code": ["TAX001", "TAX001", "TAX002"],
+            "join_date": ["2020-01-01", "2020-01-01", "2020-01-01"],
+            "credit_limit": ["1,000,000", "1,000,000", "1,000,000"],
+            "status": ["active", "active", "active"],
+        }
+    )
+
+    _result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["dedup_count"] == 1
+
+
+def test_transform_source_with_stats_null_count_matches_dropped_null_key_rows():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", None, "CUS003"],
+            "customer_name": ["A", "B", "C"],
+            "customer_type": ["retail", "retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "Ha Noi", "Da Nang"],
+            "region": ["mien nam", "mien bac", "mien trung"],
+            "address": ["123 Le Loi", "456 Tran Phu", "789 Hung Vuong"],
+            "phone": ["0900000001", "0900000002", "0900000003"],
+            "tax_code": ["TAX001", "TAX002", "TAX003"],
+            "join_date": ["2020-01-01", "2020-02-01", "2020-03-01"],
+            "credit_limit": ["1,000,000", "2,000,000", "3,000,000"],
+            "status": ["active", "active", "active"],
+        }
+    )
+
+    _result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["null_count"] == 1
+    assert stats["dedup_count"] == 0
+
+
+def test_transform_source_with_stats_zero_counts_when_nothing_dropped():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS002"],
+            "customer_name": ["A", "B"],
+            "customer_type": ["retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "Ha Noi"],
+            "region": ["mien nam", "mien bac"],
+            "address": ["123 Le Loi", "456 Tran Phu"],
+            "phone": ["0900000001", "0900000002"],
+            "tax_code": ["TAX001", "TAX002"],
+            "join_date": ["2020-01-01", "2020-02-01"],
+            "credit_limit": ["1,000,000", "2,000,000"],
+            "status": ["active", "active"],
+        }
+    )
+
+    _result, stats = transform_source_with_stats(df, "SRC03_customer_master.csv")
+
+    assert stats["dedup_count"] == 0
+    assert stats["null_count"] == 0
+    assert stats["row_count_in"] == 2
+    assert stats["row_count_out"] == 2
+
+
+def test_transform_source_still_returns_only_a_dataframe_after_refactor():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS001", "CUS002"],
+            "customer_name": ["A", "B"],
+            "customer_type": ["retail", "retail"],
+            "channel": ["Modern Trade", "Modern Trade"],
+            "province": ["TP.HCM", "Ha Noi"],
+            "region": ["mien nam", "mien bac"],
+            "address": ["123 Le Loi", "456 Tran Phu"],
+            "phone": ["0900000001", "0900000002"],
+            "tax_code": [None, "TAX002"],
+            "join_date": ["2020-01-01", "2020-02-01"],
+            "credit_limit": ["1,000,000", "2,000,000"],
+            "status": ["active", "active"],
+        }
+    )
+
+    result = transform_source(df, "SRC03_customer_master.csv")
+
+    assert isinstance(result, pl.DataFrame)
+    assert result["tax_code"].to_list() == ["UNKNOWN", "TAX002"]
+
+
 def test_transform_source_casts_and_cleans_src01_shaped_fixture():
     df = pl.DataFrame(
         {
@@ -586,7 +795,7 @@ def test_run_silver_transform_writes_ten_files_for_all_valid_sources(tmp_path):
     records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet") and f != "silver_log.parquet"]
     assert len(written) == 10
     assert len(records) == 10
     assert all(r["status"] == "success" for r in records)
@@ -608,7 +817,7 @@ def test_run_silver_transform_continues_after_one_source_fails(tmp_path):
     records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet") and f != "silver_log.parquet"]
     assert len(written) == 9  # the 9 valid sources still got written
 
     statuses = {r["source_file"]: r["status"] for r in records}
@@ -649,15 +858,270 @@ def test_run_silver_transform_is_idempotent_when_rerun_with_same_run_date(tmp_pa
     first_run_counts = {
         f: pl.read_parquet(silver_date_dir / f).height
         for f in os.listdir(silver_date_dir)
-        if f.endswith(".parquet")
+        if f.endswith(".parquet") and f != "silver_log.parquet"
     }
 
     run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
     second_run_counts = {
         f: pl.read_parquet(silver_date_dir / f).height
         for f in os.listdir(silver_date_dir)
-        if f.endswith(".parquet")
+        if f.endswith(".parquet") and f != "silver_log.parquet"
     }
 
     assert len(first_run_counts) == 10
     assert first_run_counts == second_run_counts
+
+
+def test_run_silver_transform_logs_silver_log_record_for_successful_source(tmp_path, _vietdist_caplog):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert "SRC01_sales_transactions" in _vietdist_caplog.text
+    assert "'status': 'success'" in _vietdist_caplog.text
+    assert "'run_date': '2026-08-04'" in _vietdist_caplog.text
+
+
+def test_run_silver_transform_logs_silver_log_record_for_failed_source(tmp_path, _vietdist_caplog):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    failing_source = "SRC04_product_master.xlsx"
+    df = _minimal_valid_bronze_fixture(failing_source, drop_column="product_id")
+    df.write_parquet(bronze_date_dir / "SRC04_product_master.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert "SRC04_product_master" in _vietdist_caplog.text
+    assert "'status': 'failed'" in _vietdist_caplog.text
+    assert "'error_message': None" not in _vietdist_caplog.text  # a real message was captured
+
+
+def test_run_silver_transform_logs_one_record_per_source(tmp_path, _vietdist_caplog):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert len(_vietdist_caplog.records) == 10
+
+
+def test_run_silver_transform_accepts_optional_batch_id_without_error(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    df = _minimal_valid_bronze_fixture("SRC03_customer_master.csv")
+    df.write_parquet(bronze_date_dir / "SRC03_customer_master.parquet")
+
+    # must not raise when batch_id is explicitly supplied
+    records = run_silver_transform(
+        "2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir), batch_id="explicit-batch-123"
+    )
+
+    customer_master_record = next(r for r in records if r["source_file"] == "SRC03_customer_master.csv")
+    assert customer_master_record["status"] == "success"
+
+
+def test_run_silver_transform_return_value_schema_unchanged(tmp_path):
+    """Locks in that the existing {"source_file","status","error"} return
+    contract (consumed by main.py's exit-code check) did not change shape
+    when silver log records were added."""
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    df = _minimal_valid_bronze_fixture("SRC03_customer_master.csv")
+    df.write_parquet(bronze_date_dir / "SRC03_customer_master.parquet")
+
+    records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    assert set(records[0].keys()) == {"source_file", "status", "error"}
+
+
+def test_write_silver_log_creates_file_when_none_exists(tmp_path):
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=9,
+        null_count=1,
+        dedup_count=0,
+        status="success",
+    )
+
+    path = write_silver_log(record, str(tmp_path))
+
+    assert path == str(tmp_path / "silver_log.parquet")
+    assert os.path.exists(path)
+
+
+def test_write_silver_log_readback_has_all_eight_columns(tmp_path):
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=9,
+        null_count=1,
+        dedup_count=0,
+        status="success",
+    )
+
+    path = write_silver_log(record, str(tmp_path))
+    df = pl.read_parquet(path)
+
+    assert set(df.columns) == {
+        "source_name", "run_date", "row_count_in", "row_count_out",
+        "null_count", "dedup_count", "status", "error_message",
+    }
+    assert df.height == 1
+
+
+def test_write_silver_log_second_call_appends_not_overwrites(tmp_path):
+    record_a = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=9,
+        null_count=1,
+        dedup_count=0,
+        status="success",
+    )
+    record_b = build_silver_log_record(
+        source_file="SRC03_customer_master.csv",
+        run_date="2026-08-04",
+        row_count_in=5,
+        row_count_out=5,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    write_silver_log(record_a, str(tmp_path))
+    path = write_silver_log(record_b, str(tmp_path))
+
+    df = pl.read_parquet(path)
+    assert df.height == 2
+    assert set(df["source_name"].to_list()) == {"SRC01_sales_transactions", "SRC03_customer_master"}
+
+
+def test_write_silver_log_creates_out_dir_if_missing(tmp_path):
+    out_dir = str(tmp_path / "20260804")
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=1,
+        row_count_out=1,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    path = write_silver_log(record, out_dir)
+
+    assert path == os.path.join(out_dir, "silver_log.parquet")
+    assert os.path.exists(path)
+
+
+def test_write_silver_log_preserves_failed_record_fields_on_readback(tmp_path):
+    record = build_silver_log_record(
+        source_file="SRC04_product_master.xlsx",
+        run_date="2026-08-04",
+        row_count_in=0,
+        row_count_out=0,
+        null_count=0,
+        dedup_count=0,
+        status="failed",
+        error_message="thiếu cột bắt buộc ['product_id']",
+    )
+
+    path = write_silver_log(record, str(tmp_path))
+    df = pl.read_parquet(path)
+
+    assert df["status"].to_list() == ["failed"]
+    assert df["error_message"].to_list() == ["thiếu cột bắt buộc ['product_id']"]
+
+
+def test_run_silver_transform_persists_silver_log_parquet_with_ten_rows(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    log_path = silver_date_dir / "silver_log.parquet"
+    assert log_path.exists()
+
+    log_df = pl.read_parquet(log_path)
+    assert log_df.height == 10
+    assert set(log_df["status"].to_list()) == {"success"}
+
+
+def test_run_silver_transform_rerun_same_run_date_appends_to_silver_log_not_overwrite(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    for source_file in CSV_SOURCES + EXCEL_SOURCES:
+        source_name = source_file.rsplit(".", 1)[0]
+        df = _minimal_valid_bronze_fixture(source_file)
+        df.write_parquet(bronze_date_dir / f"{source_name}.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    log_df = pl.read_parquet(silver_date_dir / "silver_log.parquet")
+
+    # 10 sources x 2 runs = 20 rows — the second run's records must be
+    # appended, not replace the first run's (this is the core VDAP-420 AC:
+    # deliberately the OPPOSITE of the per-source data Parquets, which DO
+    # get overwritten on rerun — see test_run_silver_transform_is_idempotent_when_rerun_with_same_run_date).
+    assert log_df.height == 20
+
+
+def test_run_silver_transform_logs_failed_status_to_silver_log_parquet(tmp_path):
+    bronze_dir = tmp_path / "bronze"
+    silver_dir = tmp_path / "silver"
+    bronze_date_dir = bronze_dir / "20260804"
+    bronze_date_dir.mkdir(parents=True)
+
+    failing_source = "SRC04_product_master.xlsx"
+    df = _minimal_valid_bronze_fixture(failing_source, drop_column="product_id")
+    df.write_parquet(bronze_date_dir / "SRC04_product_master.parquet")
+
+    run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
+
+    silver_date_dir = silver_dir / "20260804"
+    log_df = pl.read_parquet(silver_date_dir / "silver_log.parquet")
+    failed_row = log_df.filter(pl.col("source_name") == "SRC04_product_master")
+
+    assert failed_row["status"].to_list() == ["failed"]
+    assert failed_row["error_message"].to_list()[0] is not None
