@@ -129,7 +129,7 @@ def test_build_dim_customers_generates_1_based_surrogate_key():
 
     result = build_dim_customers(df)
 
-    assert result["customer_key"].to_list() == [1, 2]
+    assert result["customer_key"].to_list() == [-1, 1, 2]
 
 
 def test_build_dim_customers_dedupes_by_customer_id_keeping_first_row():
@@ -142,7 +142,7 @@ def test_build_dim_customers_dedupes_by_customer_id_keeping_first_row():
 
     result = build_dim_customers(df)
 
-    assert result.height == 2
+    assert result.height == 3
     kept_name = result.filter(pl.col("customer_id") == "CUS0001")["customer_name"].to_list()
     assert kept_name == ["An (bản gốc)"]
 
@@ -175,8 +175,8 @@ def test_build_dim_products_generates_1_based_surrogate_key_and_dedupes_by_produ
 
     result = build_dim_products(df)
 
-    assert result.height == 2
-    assert result["product_key"].to_list() == [1, 2]
+    assert result.height == 3
+    assert result["product_key"].to_list() == [-1, 1, 2]
     assert "_batch_id" not in result.columns
     kept_name = result.filter(pl.col("product_id") == "PRD0001")["product_name"].to_list()
     assert kept_name == ["Sữa tươi (bản gốc)"]
@@ -193,11 +193,41 @@ def test_build_dim_distributors_generates_1_based_surrogate_key_and_dedupes_by_d
 
     result = build_dim_distributors(df)
 
-    assert result.height == 2
-    assert result["distributor_key"].to_list() == [1, 2]
+    assert result.height == 3
+    assert result["distributor_key"].to_list() == [-1, 1, 2]
     assert "_batch_id" not in result.columns
     kept_name = result.filter(pl.col("distributor_id") == "DIST0001")["distributor_name"].to_list()
     assert kept_name == ["Kho A (bản gốc)"]
+
+
+def test_build_dim_customers_has_exactly_1_unknown_member_row():
+    df = pl.DataFrame({"customer_id": ["CUS0001"], "customer_name": ["An"]})
+
+    result = build_dim_customers(df)
+
+    unknown_rows = result.filter(pl.col("customer_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["customer_id"].to_list() == ["UNKNOWN"]
+
+
+def test_build_dim_products_has_exactly_1_unknown_member_row():
+    df = pl.DataFrame({"product_id": ["PRD0001"], "product_name": ["Bánh quy"]})
+
+    result = build_dim_products(df)
+
+    unknown_rows = result.filter(pl.col("product_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["product_id"].to_list() == ["UNKNOWN"]
+
+
+def test_build_dim_distributors_has_exactly_1_unknown_member_row():
+    df = pl.DataFrame({"distributor_id": ["DIST0001"], "distributor_name": ["Kho A"]})
+
+    result = build_dim_distributors(df)
+
+    unknown_rows = result.filter(pl.col("distributor_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["distributor_id"].to_list() == ["UNKNOWN"]
 
 
 def test_build_dim_date_covers_full_min_to_max_range_inclusive():
