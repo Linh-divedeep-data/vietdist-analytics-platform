@@ -26,6 +26,7 @@ from src.transform_silver import (
     transform_source,
     transform_source_with_stats,
     validate_required_columns,
+    write_silver_log,
     write_silver_parquet,
 )
 
@@ -955,3 +956,106 @@ def test_run_silver_transform_return_value_schema_unchanged(tmp_path):
     records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     assert set(records[0].keys()) == {"source_file", "status", "error"}
+
+
+def test_write_silver_log_creates_file_when_none_exists(tmp_path):
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=9,
+        null_count=1,
+        dedup_count=0,
+        status="success",
+    )
+
+    path = write_silver_log(record, str(tmp_path))
+
+    assert path == str(tmp_path / "silver_log.parquet")
+    assert os.path.exists(path)
+
+
+def test_write_silver_log_readback_has_all_eight_columns(tmp_path):
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=9,
+        null_count=1,
+        dedup_count=0,
+        status="success",
+    )
+
+    path = write_silver_log(record, str(tmp_path))
+    df = pl.read_parquet(path)
+
+    assert set(df.columns) == {
+        "source_name", "run_date", "row_count_in", "row_count_out",
+        "null_count", "dedup_count", "status", "error_message",
+    }
+    assert df.height == 1
+
+
+def test_write_silver_log_second_call_appends_not_overwrites(tmp_path):
+    record_a = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=10,
+        row_count_out=9,
+        null_count=1,
+        dedup_count=0,
+        status="success",
+    )
+    record_b = build_silver_log_record(
+        source_file="SRC03_customer_master.csv",
+        run_date="2026-08-04",
+        row_count_in=5,
+        row_count_out=5,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    write_silver_log(record_a, str(tmp_path))
+    path = write_silver_log(record_b, str(tmp_path))
+
+    df = pl.read_parquet(path)
+    assert df.height == 2
+    assert set(df["source_name"].to_list()) == {"SRC01_sales_transactions", "SRC03_customer_master"}
+
+
+def test_write_silver_log_creates_out_dir_if_missing(tmp_path):
+    out_dir = str(tmp_path / "20260804")
+    record = build_silver_log_record(
+        source_file="SRC01_sales_transactions.csv",
+        run_date="2026-08-04",
+        row_count_in=1,
+        row_count_out=1,
+        null_count=0,
+        dedup_count=0,
+        status="success",
+    )
+
+    path = write_silver_log(record, out_dir)
+
+    assert path == os.path.join(out_dir, "silver_log.parquet")
+    assert os.path.exists(path)
+
+
+def test_write_silver_log_preserves_failed_record_fields_on_readback(tmp_path):
+    record = build_silver_log_record(
+        source_file="SRC04_product_master.xlsx",
+        run_date="2026-08-04",
+        row_count_in=0,
+        row_count_out=0,
+        null_count=0,
+        dedup_count=0,
+        status="failed",
+        error_message="thiếu cột bắt buộc ['product_id']",
+    )
+
+    path = write_silver_log(record, str(tmp_path))
+    df = pl.read_parquet(path)
+
+    assert df["status"].to_list() == ["failed"]
+    assert df["error_message"].to_list() == ["thiếu cột bắt buộc ['product_id']"]

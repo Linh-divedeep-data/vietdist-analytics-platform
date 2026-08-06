@@ -146,6 +146,24 @@ def write_silver_parquet(df: pl.DataFrame, source_name: str, out_dir: str) -> st
     return path
 
 
+def write_silver_log(record: dict, out_dir: str) -> str:
+    """Persist one Silver log record to out_dir/silver_log.parquet, appending
+    to any existing rows from prior runs of the same run_date — unlike
+    Bronze's write_ingest_log(), this must NOT overwrite (VDAP-420 AC)."""
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "silver_log.parquet")
+    new_row = pl.DataFrame([record])
+
+    if os.path.exists(path):
+        existing = pl.read_parquet(path)
+        combined = pl.concat([existing, new_row], how="vertical")
+    else:
+        combined = new_row
+
+    combined.write_parquet(path)
+    return path
+
+
 def transform_source_with_stats(df: pl.DataFrame, source_file: str) -> tuple[pl.DataFrame, dict]:
     """Run one source through the full 6-step Silver cleaning pipeline, also
     returning row_count_in/out, dedup_count, and null_count for logging
