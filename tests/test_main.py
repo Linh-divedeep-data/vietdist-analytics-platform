@@ -205,3 +205,19 @@ def test_parse_args_help_does_not_crash_and_has_output(capsys):
     captured = capsys.readouterr()
     assert "--layer" in captured.out
     assert "--run-date" in captured.out
+
+
+def test_bronze_layer_does_not_call_silver_or_gold(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        pytest.fail("bronze layer must not call silver/gold transforms")
+
+    monkeypatch.setattr("main.run_silver_transform", fail_if_called)
+    monkeypatch.setattr("main.run_gold_transform", fail_if_called)
+    monkeypatch.setattr(
+        "main.run_bronze_ingestion",
+        lambda run_date, batch_id: [{"source": "src01", "status": "success"}],
+    )
+
+    exit_code = main(["--layer", "bronze"])
+
+    assert exit_code == 0
