@@ -12,6 +12,8 @@ from src.transform_gold import (
     build_dim_distributors,
     build_dim_employees,
     build_dim_products,
+    build_dim_promotion,
+    build_dim_territory,
     build_fact_sales,
     build_fact_targets,
     dedupe_by_business_key,
@@ -657,3 +659,56 @@ def test_fact_sales_and_fact_targets_preserve_run_date_and_batch_id_lineage_cols
 
     assert "_run_date" in fact_targets.columns
     assert "_batch_id" in fact_targets.columns
+
+
+def test_build_dim_territory_generates_surrogate_key_and_unknown_member():
+    df = pl.DataFrame(
+        {
+            "territory_id": ["TER0001", "TER0002"],
+            "employee_id": ["EMP001", "EMP002"],
+            "customer_id": ["CUS0001", "CUS0002"],
+            "region": ["North", "South"],
+            "team": ["Team A", "Team B"],
+            "_batch_id": ["batch-1", "batch-1"],
+        }
+    )
+
+    result = build_dim_territory(df)
+
+    assert "_batch_id" not in result.columns
+    assert result["territory_key"].to_list() == [-1, 1, 2]
+
+    unknown_rows = result.filter(pl.col("territory_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["territory_id"].to_list() == ["UNKNOWN"]
+
+    real_row = result.filter(pl.col("territory_id") == "TER0001").row(0, named=True)
+    assert real_row["region"] == "North"
+    assert real_row["team"] == "Team A"
+
+
+def test_build_dim_promotion_generates_surrogate_key_and_unknown_member():
+    df = pl.DataFrame(
+        {
+            "promotion_id": ["PROMO0001", "PROMO0002"],
+            "promotion_name": ["Khuyến mãi hè", "Khuyến mãi Tết"],
+            "start_date": [date(2024, 6, 1), date(2024, 1, 1)],
+            "end_date": [date(2024, 6, 30), date(2024, 1, 31)],
+            "applicable_products": ["PRD0001,PRD0002", "PRD0003"],
+            "_batch_id": ["batch-1", "batch-1"],
+        }
+    )
+
+    result = build_dim_promotion(df)
+
+    assert "_batch_id" not in result.columns
+    assert result["promotion_key"].to_list() == [-1, 1, 2]
+
+    unknown_rows = result.filter(pl.col("promotion_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["promotion_id"].to_list() == ["UNKNOWN"]
+
+    real_row = result.filter(pl.col("promotion_id") == "PROMO0001").row(0, named=True)
+    assert real_row["start_date"] == date(2024, 6, 1)
+    assert real_row["end_date"] == date(2024, 6, 30)
+    assert real_row["applicable_products"] == "PRD0001,PRD0002"
