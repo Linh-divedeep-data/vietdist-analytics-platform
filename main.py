@@ -14,8 +14,8 @@ from datetime import UTC, datetime
 
 from src.extract.orchestrator import run_bronze_ingestion
 from src.logger import get_logger
-from src.transform_gold import run_gold_transform
-from src.transform_silver import run_silver_transform
+from src.transform.gold.orchestrator import run_gold_transform
+from src.transform.silver.orchestrator import run_silver_transform
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

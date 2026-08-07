@@ -2,7 +2,8 @@ from datetime import date
 
 import polars as pl
 
-from src.transform_gold import add_variance_pct, build_dim_employees, build_mart_sales_vs_target
+from src.transform.gold.dims.dim_employees import build_dim_employees
+from src.transform.gold.marts.mart_sales_vs_target import add_variance_pct, build_mart_sales_vs_target
 
 
 def test_mart_sales_vs_target():
