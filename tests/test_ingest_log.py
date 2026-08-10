@@ -85,14 +85,14 @@ def test_write_ingest_log_creates_directory_if_missing(tmp_path):
 
     path = ingest_log.write_ingest_log(_records(), bronze_run_dir)
 
-    assert path == str(tmp_path / "20260804" / "ingest_log.parquet")
-    assert (tmp_path / "20260804" / "ingest_log.parquet").exists()
+    assert path == str(tmp_path / "20260804" / "ingest_log.jsonl")
+    assert (tmp_path / "20260804" / "ingest_log.jsonl").exists()
 
 
 def test_write_ingest_log_readback_has_all_seven_columns(tmp_path):
     path = ingest_log.write_ingest_log(_records(), str(tmp_path))
 
-    df = pl.read_parquet(path)
+    df = pl.read_ndjson(path)
 
     assert set(df.columns) == {
         "batch_id", "source_name", "source_file", "source_platform",
@@ -105,7 +105,7 @@ def test_write_ingest_log_rerun_overwrites_not_appends(tmp_path):
     ingest_log.write_ingest_log(_records(batch_id="b1"), str(tmp_path))
     path = ingest_log.write_ingest_log(_records(batch_id="b2"), str(tmp_path))
 
-    df = pl.read_parquet(path)
+    df = pl.read_ndjson(path)
 
     assert df.height == 2
     assert set(df["batch_id"].to_list()) == {"b2"}
