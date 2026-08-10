@@ -46,7 +46,7 @@ def _check_layer_results(records: list[dict], layer_name: str, batch_id: str) ->
 
     if failed:
         logger.error(
-            "FAILED: %d/%d nguồn lỗi ở layer=%s, xem ingest_log.parquet",
+            "FAILED: %d/%d nguồn lỗi ở layer=%s, xem ingest_log.jsonl",
             len(failed),
             total,
             layer_name,

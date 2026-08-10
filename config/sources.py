@@ -5,6 +5,16 @@ imports from src/ here — src/ imports config, not the other way
 around (avoids a reverse dependency).
 """
 
+import re
+
+
+def silver_file_name(source_file: str) -> str:
+    """SRC01_sales_transactions.csv -> silver_sales_transactions"""
+    stem = source_file.rsplit(".", 1)[0]
+    stem = re.sub(r"^SRC\d+_", "", stem)
+    return f"silver_{stem}"
+
+
 CSV_SOURCES = [
     "SRC01_sales_transactions.csv",
     "SRC03_customer_master.csv",

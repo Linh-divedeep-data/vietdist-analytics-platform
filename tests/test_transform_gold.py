@@ -1,13 +1,13 @@
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 
 import polars as pl
 
 from src.transform.gold.base import (
+    add_audit_columns,
     add_surrogate_key,
     add_unknown_member,
     dedupe_by_business_key,
-    drop_lineage_columns,
     drop_pii_columns,
     join_employee_asof,
 )
@@ -28,31 +28,6 @@ from src.transform.gold.facts.fact_sales import build_fact_sales
 from src.transform.gold.facts.fact_targets import build_fact_targets
 from src.transform.gold.marts.mart_sales_vs_target import add_variance_pct, build_mart_sales_vs_target
 from src.transform.gold.orchestrator import get_gold_output_dir, run_gold_transform, write_gold_parquet
-
-
-def test_drop_lineage_columns_removes_all_5_lineage_columns():
-    df = pl.DataFrame(
-        {
-            "customer_id": ["CUS0001"],
-            "_source_file": ["SRC03_customer_master.csv"],
-            "_source_platform": ["gdrive"],
-            "_run_date": ["2026-08-04"],
-            "_ingested_at": ["2026-08-04T00:00:00"],
-            "_batch_id": ["batch-1"],
-        }
-    )
-
-    result = drop_lineage_columns(df)
-
-    assert result.columns == ["customer_id"]
-
-
-def test_drop_lineage_columns_is_noop_when_no_lineage_columns_present():
-    df = pl.DataFrame({"customer_id": ["CUS0001"]})
-
-    result = drop_lineage_columns(df)
-
-    assert result.columns == ["customer_id"]
 
 
 def test_add_surrogate_key_starts_at_1_not_0():
@@ -132,6 +107,30 @@ def test_add_unknown_member_applies_overrides_instead_of_dtype_default():
     assert unknown_row["is_current"] is False
 
 
+def test_add_audit_columns_stamps_created_and_updated_with_same_value():
+    df = pl.DataFrame({"customer_id": ["CUS0001", "CUS0002"]})
+    fixed_now = datetime(2026, 8, 10, 14, 32, 5, tzinfo=UTC)
+
+    result = add_audit_columns(df, now=fixed_now)
+
+    assert result["created_at"].to_list() == [fixed_now, fixed_now]
+    assert result["updated_at"].to_list() == [fixed_now, fixed_now]
+    assert result["created_by"].to_list() == ["gold_pipeline", "gold_pipeline"]
+    assert result["updated_by"].to_list() == ["gold_pipeline", "gold_pipeline"]
+    assert result["customer_id"].to_list() == ["CUS0001", "CUS0002"]
+
+
+def test_add_audit_columns_defaults_now_to_current_utc_time_when_omitted():
+    df = pl.DataFrame({"customer_id": ["CUS0001"]})
+
+    before = datetime.now(UTC)
+    result = add_audit_columns(df)
+    after = datetime.now(UTC)
+
+    stamped = result["created_at"].item()
+    assert before <= stamped <= after
+
+
 def test_drop_pii_columns_removes_configured_columns_for_dim():
     df = pl.DataFrame(
         {
@@ -185,7 +184,7 @@ def test_build_dim_customers_dedupes_by_customer_id_keeping_first_row():
     assert kept_name == ["An (bản gốc)"]
 
 
-def test_build_dim_customers_drops_lineage_columns():
+def test_build_dim_customers_preserves_lineage_columns():
     df = pl.DataFrame(
         {
             "customer_id": ["CUS0001"],
@@ -197,9 +196,30 @@ def test_build_dim_customers_drops_lineage_columns():
 
     result = build_dim_customers(df)
 
-    assert "_source_file" not in result.columns
-    assert "_batch_id" not in result.columns
+    assert "_source_file" in result.columns
+    assert "_batch_id" in result.columns
     assert "customer_name" in result.columns
+
+    real_row = result.filter(pl.col("customer_id") == "CUS0001").row(0, named=True)
+    assert real_row["_source_file"] == "SRC03_customer_master.csv"
+    assert real_row["_batch_id"] == "batch-1"
+
+
+def test_build_dim_customers_unknown_member_has_null_lineage_not_the_string_unknown():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS0001"],
+            "customer_name": ["An"],
+            "_source_file": ["SRC03_customer_master.csv"],
+            "_batch_id": ["batch-1"],
+        }
+    )
+
+    result = build_dim_customers(df)
+
+    unknown_row = result.filter(pl.col("customer_key") == -1).row(0, named=True)
+    assert unknown_row["_source_file"] is None
+    assert unknown_row["_batch_id"] is None
 
 
 def test_build_dim_products_generates_1_based_surrogate_key_and_dedupes_by_product_id():
@@ -215,7 +235,7 @@ def test_build_dim_products_generates_1_based_surrogate_key_and_dedupes_by_produ
 
     assert result.height == 3
     assert result["product_key"].to_list() == [-1, 1, 2]
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     kept_name = result.filter(pl.col("product_id") == "PRD0001")["product_name"].to_list()
     assert kept_name == ["Sữa tươi (bản gốc)"]
 
@@ -233,7 +253,7 @@ def test_build_dim_distributors_generates_1_based_surrogate_key_and_dedupes_by_d
 
     assert result.height == 3
     assert result["distributor_key"].to_list() == [-1, 1, 2]
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     kept_name = result.filter(pl.col("distributor_id") == "DIST0001")["distributor_name"].to_list()
     assert kept_name == ["Kho A (bản gốc)"]
 
@@ -340,7 +360,10 @@ def test_build_dim_date_column_order_matches_erd():
 
     result = build_dim_date(df)
 
-    assert result.columns == ["date_key", "full_date", "year", "quarter", "month", "day"]
+    assert result.columns == [
+        "date_key", "full_date", "year", "quarter", "month", "day",
+        "created_at", "created_by", "updated_at", "updated_by",
+    ]
 
 
 def test_add_scd2_valid_dates_covers_middle_resigned_and_active_last_versions():
@@ -441,10 +464,13 @@ def test_build_dim_employees_chains_scd2_dates_flag_and_surrogate_key():
 
     result = build_dim_employees(df)
 
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     assert result.columns[0] == "employee_key"
     real_rows = result.filter(pl.col("employee_key") != -1)
     assert real_rows["employee_key"].to_list() == [1, 2, 3]
+
+    unknown_row = result.filter(pl.col("employee_key") == -1).row(0, named=True)
+    assert unknown_row["_batch_id"] is None
 
     rows = {(r["employee_id"], r["version"]): r for r in real_rows.to_dicts()}
     # EMP001 v1: không phải version cuối -> valid_to = effective_date của v2, không phải current
@@ -718,12 +744,13 @@ def test_build_dim_territory_generates_surrogate_key_and_unknown_member():
 
     result = build_dim_territory(df)
 
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     assert result["territory_key"].to_list() == [-1, 1, 2]
 
     unknown_rows = result.filter(pl.col("territory_key") == -1)
     assert unknown_rows.height == 1
     assert unknown_rows["territory_id"].to_list() == ["UNKNOWN"]
+    assert unknown_rows["_batch_id"].to_list() == [None]
 
     real_row = result.filter(pl.col("territory_id") == "TER0001").row(0, named=True)
     assert real_row["region"] == "North"
@@ -744,12 +771,13 @@ def test_build_dim_promotion_generates_surrogate_key_and_unknown_member():
 
     result = build_dim_promotion(df)
 
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     assert result["promotion_key"].to_list() == [-1, 1, 2]
 
     unknown_rows = result.filter(pl.col("promotion_key") == -1)
     assert unknown_rows.height == 1
     assert unknown_rows["promotion_id"].to_list() == ["UNKNOWN"]
+    assert unknown_rows["_batch_id"].to_list() == [None]
 
     real_row = result.filter(pl.col("promotion_id") == "PROMO0001").row(0, named=True)
     assert real_row["start_date"] == date(2024, 6, 1)
@@ -929,7 +957,7 @@ def _write_full_silver_fixture(silver_date_dir):
             "employee_id": ["EMP001"],
             "net_amount": [100.0],
         }
-    ).write_parquet(silver_date_dir / "SRC01_sales_transactions.parquet")
+    ).write_parquet(silver_date_dir / "silver_sales_transactions.parquet")
 
     pl.DataFrame(
         {
@@ -939,13 +967,13 @@ def _write_full_silver_fixture(silver_date_dir):
             "month": ["1"],
             "target_revenue": [90.0],
         }
-    ).write_parquet(silver_date_dir / "SRC02_sales_target_plan.parquet")
+    ).write_parquet(silver_date_dir / "silver_sales_target_plan.parquet")
 
     pl.DataFrame({"customer_id": ["CUS0001"], "customer_name": ["An"]}).write_parquet(
-        silver_date_dir / "SRC03_customer_master.parquet"
+        silver_date_dir / "silver_customer_master.parquet"
     )
     pl.DataFrame({"product_id": ["PRD0001"], "product_name": ["Sữa"]}).write_parquet(
-        silver_date_dir / "SRC04_product_master.parquet"
+        silver_date_dir / "silver_product_master.parquet"
     )
     pl.DataFrame(
         {
@@ -955,9 +983,9 @@ def _write_full_silver_fixture(silver_date_dir):
             "fill_rate_pct": [95.0],
             "ontime_delivery": ["Yes"],
         }
-    ).write_parquet(silver_date_dir / "SRC05_distributor_orders.parquet")
+    ).write_parquet(silver_date_dir / "silver_distributor_orders.parquet")
     pl.DataFrame({"distributor_id": ["DIST0001"], "distributor_name": ["Kho A"]}).write_parquet(
-        silver_date_dir / "SRC06_distributor_master.parquet"
+        silver_date_dir / "silver_distributor_master.parquet"
     )
     pl.DataFrame(
         {
@@ -966,9 +994,9 @@ def _write_full_silver_fixture(silver_date_dir):
             "effective_date": [date(2024, 1, 1)],
             "resign_date": [None],
         }
-    ).write_parquet(silver_date_dir / "SRC07_employee_master.parquet")
+    ).write_parquet(silver_date_dir / "silver_employee_master.parquet")
     pl.DataFrame({"territory_id": ["TER0001"]}).write_parquet(
-        silver_date_dir / "SRC08_territory_mapping.parquet"
+        silver_date_dir / "silver_territory_mapping.parquet"
     )
     pl.DataFrame(
         {
@@ -978,9 +1006,9 @@ def _write_full_silver_fixture(silver_date_dir):
             "employee_id": ["EMP001"],
             "return_date": [date(2024, 2, 1)],
         }
-    ).write_parquet(silver_date_dir / "SRC09_return_transactions.parquet")
+    ).write_parquet(silver_date_dir / "silver_return_transactions.parquet")
     pl.DataFrame({"promotion_id": ["PROMO001"]}).write_parquet(
-        silver_date_dir / "SRC10_promotion_program.parquet"
+        silver_date_dir / "silver_promotion_program.parquet"
     )
 
 
@@ -1002,14 +1030,21 @@ def test_run_gold_transform_writes_all_12_tables_with_valid_cross_table_fks(tmp_
         "dim_promotion", "dim_employees", "fact_sales", "fact_targets", "fact_returns",
         "fact_distributor_orders", "mart_sales_vs_target",
     }
-    written = {f.stem for f in gold_date_dir.glob("*.parquet")} - {"gold_log"}
+    written = {f.stem for f in gold_date_dir.glob("*.parquet")}
     assert written == expected_tables
-    assert os.path.exists(gold_date_dir / "gold_log.parquet")
+    assert os.path.exists(gold_date_dir / "gold_log.jsonl")
 
     fact_sales = pl.read_parquet(gold_date_dir / "fact_sales.parquet")
     dim_customers = pl.read_parquet(gold_date_dir / "dim_customers.parquet")
     valid_customer_keys = set(dim_customers["customer_key"].to_list())
     assert set(fact_sales["customer_key"].to_list()) <= valid_customer_keys
+
+    audit_cols = {"created_at", "created_by", "updated_at", "updated_by"}
+    dim_and_fact_tables = expected_tables - {"mart_sales_vs_target"}
+    for table_name in dim_and_fact_tables:
+        table = pl.read_parquet(gold_date_dir / f"{table_name}.parquet")
+        assert audit_cols <= set(table.columns), f"{table_name} missing audit columns"
+        assert table["created_by"].to_list() == ["gold_pipeline"] * table.height
 
 
 def test_run_gold_transform_success_writes_one_gold_log_row_per_table(tmp_path):
@@ -1021,7 +1056,7 @@ def test_run_gold_transform_success_writes_one_gold_log_row_per_table(tmp_path):
 
     run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
 
-    gold_log = pl.read_parquet(gold_dir / "20260804" / "gold_log.parquet")
+    gold_log = pl.read_ndjson(gold_dir / "20260804" / "gold_log.jsonl")
     assert gold_log.height == 12
     assert set(gold_log["status"].to_list()) == {"success"}
     assert gold_log["error_message"].null_count() == 12
@@ -1039,7 +1074,7 @@ def test_run_gold_transform_failure_writes_single_gold_layer_log_row(tmp_path):
     assert len(records) == 1
     assert records[0]["status"] == "failed"
 
-    gold_log = pl.read_parquet(gold_dir / "20260804" / "gold_log.parquet")
+    gold_log = pl.read_ndjson(gold_dir / "20260804" / "gold_log.jsonl")
     assert gold_log.height == 1
     assert gold_log["table_name"].item() == "gold_layer"
     assert gold_log["status"].item() == "failed"
@@ -1057,5 +1092,5 @@ def test_run_gold_transform_rerun_appends_gold_log_rows(tmp_path):
     run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
     run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
 
-    gold_log = pl.read_parquet(gold_dir / "20260804" / "gold_log.parquet")
+    gold_log = pl.read_ndjson(gold_dir / "20260804" / "gold_log.jsonl")
     assert gold_log.height == 24

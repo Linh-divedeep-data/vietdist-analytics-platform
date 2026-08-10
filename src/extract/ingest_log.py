@@ -26,8 +26,8 @@ def build_ingest_log_record(
 
 
 def write_ingest_log(records: list[dict], bronze_run_dir: str) -> str:
-    """Write all ingest-log records for a run into one Parquet file, overwriting any prior run."""
+    """Write all ingest-log records for a run into one JSON Lines file, overwriting any prior run."""
     os.makedirs(bronze_run_dir, exist_ok=True)
-    path = os.path.join(bronze_run_dir, "ingest_log.parquet")
-    pl.DataFrame(records).write_parquet(path)
+    path = os.path.join(bronze_run_dir, "ingest_log.jsonl")
+    pl.DataFrame(records).write_ndjson(path)
     return path

@@ -2,15 +2,18 @@
 
 import polars as pl
 
+from src.transform.gold.base import add_audit_columns
+
 
 def build_dim_date(sales_silver_df: pl.DataFrame) -> pl.DataFrame:
-    """Build dim_date: 1 row per calendar day spanning sales_transactions.order_date min..max.
-    date_key uses the YYYYMMDD integer convention (Kimball), not a row-position surrogate key."""
+    """Build dim_date: 1 row per calendar day spanning sales_transactions.order_date min..max,
+    stamp audit columns. date_key uses the YYYYMMDD integer convention (Kimball), not a
+    row-position surrogate key."""
     min_date = sales_silver_df["order_date"].min()
     max_date = sales_silver_df["order_date"].max()
     dates = pl.date_range(min_date, max_date, "1d", eager=True)
 
-    return (
+    result = (
         pl.DataFrame({"full_date": dates})
         .with_columns(
             pl.col("full_date").dt.strftime("%Y%m%d").cast(pl.Int32).alias("date_key"),
@@ -21,3 +24,4 @@ def build_dim_date(sales_silver_df: pl.DataFrame) -> pl.DataFrame:
         )
         .select(["date_key", "full_date", "year", "quarter", "month", "day"])
     )
+    return add_audit_columns(result)

@@ -8,7 +8,7 @@ import uuid
 import polars as pl
 
 from config.settings import BRONZE_DIR, SILVER_DIR
-from config.sources import CSV_SOURCES, EXCEL_SOURCES
+from config.sources import CSV_SOURCES, EXCEL_SOURCES, silver_file_name
 from src.logger import get_logger
 from src.transform.silver.base import transform_source_with_stats
 from src.transform.silver.steps import _row_count
@@ -65,7 +65,7 @@ def run_silver_transform(
             row_count_out = stats["row_count_out"]
             dedup_count = stats["dedup_count"]
             null_count = stats["null_count"]
-            write_silver_parquet(result, source_name, out_dir)
+            write_silver_parquet(result, silver_file_name(source_file), out_dir)
         except Exception as error:  # noqa: BLE001 -- deliberately broad: any error type must not crash the rest of the batch (VDAP-328 AC)
             record["status"] = "failed"
             record["error"] = str(error)
