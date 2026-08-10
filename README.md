@@ -17,17 +17,17 @@ Google Drive (10 sources)
 └───────┬───────┘
         │  src/extract/  (schema validation, lineage columns, idempotent write)
         ▼
-┌───────────────┐   + _source_file, _batch_id, _run_date, ... ; ingest_log.parquet
+┌───────────────┐   + _source_file, _batch_id, _run_date, ... ; ingest_log.jsonl
 │  data/bronze/ │
 └───────┬───────┘
         │  src/transform/silver/  (type casts, dedup, NULL handling, text standardization)
         ▼
-┌───────────────┐   1 clean Parquet per source ; silver_log.parquet
+┌───────────────┐   1 clean Parquet per source ; silver_log.jsonl
 │  data/silver/ │
 └───────┬───────┘
         │  src/transform/gold/  (surrogate keys, SCD2, Unknown Member rows, PII drop)
         ▼
-┌───────────────┐   7 dims + 4 facts + 1 mart ; gold_log.parquet
+┌───────────────┐   7 dims + 4 facts + 1 mart ; gold_log.jsonl
 │  data/gold/   │
 └───────────────┘
         │
@@ -93,7 +93,7 @@ Each layer reads the previous layer's output for the same `run_date`, so run the
 2026-08-04 12:00:00,000 [INFO] [batch_id=...] OK: 10/10 nguồn thành công ở layer=silver
 2026-08-04 12:00:00,000 [INFO] [batch_id=...] pipeline run finished
 ```
-and exit code `0`; a non-zero exit code means at least one source failed for that layer (see `<layer>_log.parquet` under that layer's output directory for per-source detail).
+and exit code `0`; a non-zero exit code means at least one source failed for that layer (see `<layer>_log.jsonl` under that layer's output directory for per-source detail).
 
 > `--layer all` is accepted by the CLI (`choices=["bronze","silver","gold","all"]`) but not wired up yet — run the three layers separately for now.
 
@@ -120,7 +120,7 @@ src/
 │   │   ├── base.py           # transform_source_with_stats() engine
 │   │   ├── registry.py       # per-source overrides beyond the 6 standard steps
 │   │   ├── unit_of_work/     # only sources that need an override live here
-│   │   ├── log.py            # silver_log.parquet record building/writing
+│   │   ├── log.py            # silver_log.jsonl record building/writing
 │   │   └── orchestrator.py   # run_silver_transform()
 │   └── gold/              # Silver -> Dim/Fact/Mart data/gold/<date>/*.parquet
 │       ├── base.py           # shared helpers (surrogate keys, SCD2 as-of join, ...)
@@ -128,7 +128,7 @@ src/
 │       ├── facts/             # 1 file per fact table
 │       ├── marts/             # 1 file per data mart
 │       ├── registry.py        # BUILD_ORDER (dims -> facts -> marts)
-│       ├── log.py             # gold_log.parquet record building/writing
+│       ├── log.py             # gold_log.jsonl record building/writing
 │       └── orchestrator.py    # run_gold_transform()
 ├── gdrive_connector.py
 └── logger.py

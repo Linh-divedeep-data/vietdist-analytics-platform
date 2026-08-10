@@ -201,7 +201,7 @@ def test_check_layer_results_returns_1_and_logs_error_on_any_failure(capsys):
     assert "FAILED: 1/2" in output
     assert "layer=bronze" in output
     assert "[ERROR]" in output
-    assert "ingest_log.parquet" in output
+    assert "ingest_log.jsonl" in output
 
 
 def test_check_layer_results_returns_0_and_logs_ok_when_all_succeed(capsys):

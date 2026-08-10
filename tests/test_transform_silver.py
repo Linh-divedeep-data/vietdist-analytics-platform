@@ -798,10 +798,13 @@ def test_run_silver_transform_writes_ten_files_for_all_valid_sources(tmp_path):
     records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet") and f != "silver_log.parquet"]
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
     assert len(written) == 10
     assert len(records) == 10
     assert all(r["status"] == "success" for r in records)
+    assert all(f.startswith("silver_") for f in written)
+    assert not any(f.startswith("SRC") for f in written)
+    assert "silver_sales_transactions.parquet" in written
 
 
 def test_run_silver_transform_continues_after_one_source_fails(tmp_path):
@@ -820,7 +823,7 @@ def test_run_silver_transform_continues_after_one_source_fails(tmp_path):
     records = run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet") and f != "silver_log.parquet"]
+    written = [f for f in os.listdir(silver_date_dir) if f.endswith(".parquet")]
     assert len(written) == 9  # the 9 valid sources still got written
 
     statuses = {r["source_file"]: r["status"] for r in records}
@@ -861,14 +864,14 @@ def test_run_silver_transform_is_idempotent_when_rerun_with_same_run_date(tmp_pa
     first_run_counts = {
         f: pl.read_parquet(silver_date_dir / f).height
         for f in os.listdir(silver_date_dir)
-        if f.endswith(".parquet") and f != "silver_log.parquet"
+        if f.endswith(".parquet")
     }
 
     run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
     second_run_counts = {
         f: pl.read_parquet(silver_date_dir / f).height
         for f in os.listdir(silver_date_dir)
-        if f.endswith(".parquet") and f != "silver_log.parquet"
+        if f.endswith(".parquet")
     }
 
     assert len(first_run_counts) == 10
@@ -974,7 +977,7 @@ def test_write_silver_log_creates_file_when_none_exists(tmp_path):
 
     path = write_silver_log(record, str(tmp_path))
 
-    assert path == str(tmp_path / "silver_log.parquet")
+    assert path == str(tmp_path / "silver_log.jsonl")
     assert os.path.exists(path)
 
 
@@ -990,7 +993,7 @@ def test_write_silver_log_readback_has_all_eight_columns(tmp_path):
     )
 
     path = write_silver_log(record, str(tmp_path))
-    df = pl.read_parquet(path)
+    df = pl.read_ndjson(path)
 
     assert set(df.columns) == {
         "source_name", "run_date", "row_count_in", "row_count_out",
@@ -1022,7 +1025,7 @@ def test_write_silver_log_second_call_appends_not_overwrites(tmp_path):
     write_silver_log(record_a, str(tmp_path))
     path = write_silver_log(record_b, str(tmp_path))
 
-    df = pl.read_parquet(path)
+    df = pl.read_ndjson(path)
     assert df.height == 2
     assert set(df["source_name"].to_list()) == {"SRC01_sales_transactions", "SRC03_customer_master"}
 
@@ -1041,7 +1044,7 @@ def test_write_silver_log_creates_out_dir_if_missing(tmp_path):
 
     path = write_silver_log(record, out_dir)
 
-    assert path == os.path.join(out_dir, "silver_log.parquet")
+    assert path == os.path.join(out_dir, "silver_log.jsonl")
     assert os.path.exists(path)
 
 
@@ -1058,13 +1061,13 @@ def test_write_silver_log_preserves_failed_record_fields_on_readback(tmp_path):
     )
 
     path = write_silver_log(record, str(tmp_path))
-    df = pl.read_parquet(path)
+    df = pl.read_ndjson(path)
 
     assert df["status"].to_list() == ["failed"]
     assert df["error_message"].to_list() == ["thiếu cột bắt buộc ['product_id']"]
 
 
-def test_run_silver_transform_persists_silver_log_parquet_with_ten_rows(tmp_path):
+def test_run_silver_transform_persists_silver_log_jsonl_with_ten_rows(tmp_path):
     bronze_dir = tmp_path / "bronze"
     silver_dir = tmp_path / "silver"
     bronze_date_dir = bronze_dir / "20260804"
@@ -1078,10 +1081,10 @@ def test_run_silver_transform_persists_silver_log_parquet_with_ten_rows(tmp_path
     run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    log_path = silver_date_dir / "silver_log.parquet"
+    log_path = silver_date_dir / "silver_log.jsonl"
     assert log_path.exists()
 
-    log_df = pl.read_parquet(log_path)
+    log_df = pl.read_ndjson(log_path)
     assert log_df.height == 10
     assert set(log_df["status"].to_list()) == {"success"}
 
@@ -1101,7 +1104,7 @@ def test_run_silver_transform_rerun_same_run_date_appends_to_silver_log_not_over
     run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    log_df = pl.read_parquet(silver_date_dir / "silver_log.parquet")
+    log_df = pl.read_ndjson(silver_date_dir / "silver_log.jsonl")
 
     # 10 sources x 2 runs = 20 rows — the second run's records must be
     # appended, not replace the first run's (this is the core VDAP-420 AC:
@@ -1110,7 +1113,7 @@ def test_run_silver_transform_rerun_same_run_date_appends_to_silver_log_not_over
     assert log_df.height == 20
 
 
-def test_run_silver_transform_logs_failed_status_to_silver_log_parquet(tmp_path):
+def test_run_silver_transform_logs_failed_status_to_silver_log_jsonl(tmp_path):
     bronze_dir = tmp_path / "bronze"
     silver_dir = tmp_path / "silver"
     bronze_date_dir = bronze_dir / "20260804"
@@ -1123,7 +1126,7 @@ def test_run_silver_transform_logs_failed_status_to_silver_log_parquet(tmp_path)
     run_silver_transform("2026-08-04", bronze_dir=str(bronze_dir), silver_dir=str(silver_dir))
 
     silver_date_dir = silver_dir / "20260804"
-    log_df = pl.read_parquet(silver_date_dir / "silver_log.parquet")
+    log_df = pl.read_ndjson(silver_date_dir / "silver_log.jsonl")
     failed_row = log_df.filter(pl.col("source_name") == "SRC04_product_master")
 
     assert failed_row["status"].to_list() == ["failed"]

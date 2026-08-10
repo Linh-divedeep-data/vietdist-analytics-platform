@@ -1,7 +1,9 @@
-"""Helpers shared across Gold dims/facts: drop_lineage_columns, add_surrogate_key,
-dedupe_by_business_key, add_unknown_member, drop_pii_columns, join_employee_asof."""
+"""Helpers shared across Gold dims/facts: add_surrogate_key,
+dedupe_by_business_key, add_unknown_member, add_audit_columns, drop_pii_columns,
+join_employee_asof."""
 
 import logging
+from datetime import UTC, datetime
 
 import polars as pl
 
@@ -9,12 +11,17 @@ from config.sources import PII_COLUMNS_TO_DROP
 
 _logger = logging.getLogger(__name__)
 
-_LINEAGE_COLUMNS = ["_source_file", "_source_platform", "_run_date", "_ingested_at", "_batch_id"]
+AUDIT_ACTOR = "gold_pipeline"
 
-
-def drop_lineage_columns(df: pl.DataFrame) -> pl.DataFrame:
-    """Drop the 5 Bronze/Silver lineage columns (if present) — not needed in a Gold Dimension table."""
-    return df.drop(_LINEAGE_COLUMNS, strict=False)
+# Unknown Member row overrides for add_unknown_member(): without these, the 4 Utf8 lineage
+# columns default to the string "Unknown" (easy to mistake for a real audit value); _ingested_at
+# is already NULL by default since it's a Datetime column, not Utf8.
+LINEAGE_NULL_OVERRIDES = {
+    "_source_file": None,
+    "_source_platform": None,
+    "_run_date": None,
+    "_batch_id": None,
+}
 
 
 def add_surrogate_key(df: pl.DataFrame, key_col: str) -> pl.DataFrame:
@@ -54,6 +61,20 @@ def add_unknown_member(
 
     unknown_row = pl.DataFrame([unknown_values], schema=df.schema)
     return pl.concat([unknown_row, df])
+
+
+def add_audit_columns(df: pl.DataFrame, now: datetime | None = None) -> pl.DataFrame:
+    """Stamp created_at/created_by/updated_at/updated_by on every row. Gold fully rebuilds each
+    Dim/Fact from Silver every run (no upsert/merge), so created_at and updated_at are always the
+    same build-time timestamp — there's no prior state to diff against to know what "really"
+    changed. created_by/updated_by are a fixed pipeline identifier, not a real per-row actor."""
+    now = now or datetime.now(UTC)
+    return df.with_columns(
+        pl.lit(now).alias("created_at"),
+        pl.lit(AUDIT_ACTOR).alias("created_by"),
+        pl.lit(now).alias("updated_at"),
+        pl.lit(AUDIT_ACTOR).alias("updated_by"),
+    )
 
 
 def drop_pii_columns(df: pl.DataFrame, dim_name: str) -> pl.DataFrame:

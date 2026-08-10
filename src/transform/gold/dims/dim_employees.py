@@ -3,9 +3,10 @@
 import polars as pl
 
 from src.transform.gold.base import (
+    LINEAGE_NULL_OVERRIDES,
+    add_audit_columns,
     add_surrogate_key,
     add_unknown_member,
-    drop_lineage_columns,
     drop_pii_columns,
 )
 
@@ -31,12 +32,15 @@ def add_is_current_flag(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def build_dim_employees(silver_df: pl.DataFrame) -> pl.DataFrame:
-    """Build dim_employees (SCD2): drop lineage columns, compute valid_from/valid_to + is_current,
-    add employee_key (1-based), prepend Unknown Member row (key=-1, is_current=False), drop PII
-    columns — 1 employee_id may have several employee_key, one per version."""
-    result = drop_lineage_columns(silver_df)
-    result = add_scd2_valid_dates(result)
+    """Build dim_employees (SCD2): compute valid_from/valid_to + is_current, add employee_key
+    (1-based), prepend Unknown Member row (key=-1, is_current=False, lineage columns NULL), drop
+    PII columns, stamp audit columns — 1 employee_id may have several employee_key, one per
+    version. Lineage columns are preserved for audit/traceability."""
+    result = add_scd2_valid_dates(silver_df)
     result = add_is_current_flag(result)
     result = add_surrogate_key(result, "employee_key")
-    result = add_unknown_member(result, "employee_key", "employee_id", overrides={"is_current": False})
-    return drop_pii_columns(result, "dim_employees")
+    result = add_unknown_member(
+        result, "employee_key", "employee_id", overrides={**LINEAGE_NULL_OVERRIDES, "is_current": False}
+    )
+    result = drop_pii_columns(result, "dim_employees")
+    return add_audit_columns(result)

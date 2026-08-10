@@ -33,7 +33,7 @@ def build_silver_log_record(
 
 
 def write_silver_log(record: dict, out_dir: str) -> str:
-    """Persist one Silver log record to out_dir/silver_log.parquet, appending
+    """Persist one Silver log record to out_dir/silver_log.jsonl, appending
     to any existing rows from prior runs of the same run_date — unlike
     Bronze's write_ingest_log(), this must NOT overwrite (VDAP-420 AC).
 
@@ -45,14 +45,14 @@ def write_silver_log(record: dict, out_dir: str) -> str:
     pin the dtype explicitly instead of leaving it to per-call inference.
     """
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, "silver_log.parquet")
+    path = os.path.join(out_dir, "silver_log.jsonl")
     new_row = pl.DataFrame([record], schema_overrides={"error_message": pl.Utf8})
 
     if os.path.exists(path):
-        existing = pl.scan_parquet(path).with_columns(pl.col("error_message").cast(pl.Utf8))
-        combined = pl.concat([existing, new_row.lazy()], how="vertical")
+        existing = pl.read_ndjson(path).with_columns(pl.col("error_message").cast(pl.Utf8))
+        combined = pl.concat([existing, new_row], how="vertical")
     else:
-        combined = new_row.lazy()
+        combined = new_row
 
-    combined.collect().write_parquet(path)
+    combined.write_ndjson(path)
     return path

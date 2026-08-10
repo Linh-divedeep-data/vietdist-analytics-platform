@@ -7,6 +7,7 @@ import uuid
 import polars as pl
 
 from config.settings import GOLD_DIR, SILVER_DIR
+from config.sources import silver_file_name
 from src.logger import get_logger
 from src.transform.gold.dims.dim_customers import build_dim_customers
 from src.transform.gold.dims.dim_date import build_dim_date
@@ -51,25 +52,26 @@ def run_gold_transform(
     silver_source_dir = get_silver_output_dir(run_date, silver_dir)
     out_dir = get_gold_output_dir(run_date, gold_dir)
 
-    def read(source_name: str) -> pl.DataFrame:
-        return pl.read_parquet(os.path.join(silver_source_dir, f"{source_name}.parquet"))
+    def read(source_file: str) -> pl.DataFrame:
+        path = os.path.join(silver_source_dir, f"{silver_file_name(source_file)}.parquet")
+        return pl.read_parquet(path)
 
     try:
-        dim_customers = build_dim_customers(read("SRC03_customer_master"))
-        dim_products = build_dim_products(read("SRC04_product_master"))
-        dim_distributors = build_dim_distributors(read("SRC06_distributor_master"))
-        dim_territory = build_dim_territory(read("SRC08_territory_mapping"))
-        dim_promotion = build_dim_promotion(read("SRC10_promotion_program"))
-        dim_employees = build_dim_employees(read("SRC07_employee_master"))
+        dim_customers = build_dim_customers(read("SRC03_customer_master.csv"))
+        dim_products = build_dim_products(read("SRC04_product_master.xlsx"))
+        dim_distributors = build_dim_distributors(read("SRC06_distributor_master.csv"))
+        dim_territory = build_dim_territory(read("SRC08_territory_mapping.xlsx"))
+        dim_promotion = build_dim_promotion(read("SRC10_promotion_program.xlsx"))
+        dim_employees = build_dim_employees(read("SRC07_employee_master.xlsx"))
 
-        sales_silver = read("SRC01_sales_transactions")
+        sales_silver = read("SRC01_sales_transactions.csv")
         dim_date = build_dim_date(sales_silver)
 
         fact_sales = build_fact_sales(sales_silver, dim_customers, dim_products, dim_employees, dim_date)
-        fact_targets = build_fact_targets(read("SRC02_sales_target_plan"), dim_employees)
-        fact_returns = build_fact_returns(read("SRC09_return_transactions"), dim_customers, dim_products, dim_employees)
+        fact_targets = build_fact_targets(read("SRC02_sales_target_plan.xlsx"), dim_employees)
+        fact_returns = build_fact_returns(read("SRC09_return_transactions.csv"), dim_customers, dim_products, dim_employees)
         fact_distributor_orders = build_fact_distributor_orders(
-            read("SRC05_distributor_orders"), dim_distributors, dim_products
+            read("SRC05_distributor_orders.xlsx"), dim_distributors, dim_products
         )
 
         mart_sales_vs_target = add_variance_pct(build_mart_sales_vs_target(fact_sales, fact_targets))
