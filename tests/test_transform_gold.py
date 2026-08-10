@@ -1,49 +1,33 @@
-from datetime import date
+import os
+from datetime import UTC, date, datetime
 
 import polars as pl
 
-from src.transform_gold import (
-    add_is_current_flag,
-    add_scd2_valid_dates,
+from src.transform.gold.base import (
+    add_audit_columns,
     add_surrogate_key,
     add_unknown_member,
-    build_dim_customers,
-    build_dim_date,
-    build_dim_distributors,
-    build_dim_employees,
-    build_dim_products,
-    build_fact_sales,
-    build_fact_targets,
     dedupe_by_business_key,
-    drop_lineage_columns,
     drop_pii_columns,
     join_employee_asof,
 )
-
-
-def test_drop_lineage_columns_removes_all_5_lineage_columns():
-    df = pl.DataFrame(
-        {
-            "customer_id": ["CUS0001"],
-            "_source_file": ["SRC03_customer_master.csv"],
-            "_source_platform": ["gdrive"],
-            "_run_date": ["2026-08-04"],
-            "_ingested_at": ["2026-08-04T00:00:00"],
-            "_batch_id": ["batch-1"],
-        }
-    )
-
-    result = drop_lineage_columns(df)
-
-    assert result.columns == ["customer_id"]
-
-
-def test_drop_lineage_columns_is_noop_when_no_lineage_columns_present():
-    df = pl.DataFrame({"customer_id": ["CUS0001"]})
-
-    result = drop_lineage_columns(df)
-
-    assert result.columns == ["customer_id"]
+from src.transform.gold.dims.dim_customers import build_dim_customers
+from src.transform.gold.dims.dim_date import build_dim_date
+from src.transform.gold.dims.dim_distributors import build_dim_distributors
+from src.transform.gold.dims.dim_employees import (
+    add_is_current_flag,
+    add_scd2_valid_dates,
+    build_dim_employees,
+)
+from src.transform.gold.dims.dim_products import build_dim_products
+from src.transform.gold.dims.dim_promotion import build_dim_promotion
+from src.transform.gold.dims.dim_territory import build_dim_territory
+from src.transform.gold.facts.fact_distributor_orders import build_fact_distributor_orders
+from src.transform.gold.facts.fact_returns import build_fact_returns
+from src.transform.gold.facts.fact_sales import build_fact_sales
+from src.transform.gold.facts.fact_targets import build_fact_targets
+from src.transform.gold.marts.mart_sales_vs_target import add_variance_pct, build_mart_sales_vs_target
+from src.transform.gold.orchestrator import get_gold_output_dir, run_gold_transform, write_gold_parquet
 
 
 def test_add_surrogate_key_starts_at_1_not_0():
@@ -123,6 +107,30 @@ def test_add_unknown_member_applies_overrides_instead_of_dtype_default():
     assert unknown_row["is_current"] is False
 
 
+def test_add_audit_columns_stamps_created_and_updated_with_same_value():
+    df = pl.DataFrame({"customer_id": ["CUS0001", "CUS0002"]})
+    fixed_now = datetime(2026, 8, 10, 14, 32, 5, tzinfo=UTC)
+
+    result = add_audit_columns(df, now=fixed_now)
+
+    assert result["created_at"].to_list() == [fixed_now, fixed_now]
+    assert result["updated_at"].to_list() == [fixed_now, fixed_now]
+    assert result["created_by"].to_list() == ["gold_pipeline", "gold_pipeline"]
+    assert result["updated_by"].to_list() == ["gold_pipeline", "gold_pipeline"]
+    assert result["customer_id"].to_list() == ["CUS0001", "CUS0002"]
+
+
+def test_add_audit_columns_defaults_now_to_current_utc_time_when_omitted():
+    df = pl.DataFrame({"customer_id": ["CUS0001"]})
+
+    before = datetime.now(UTC)
+    result = add_audit_columns(df)
+    after = datetime.now(UTC)
+
+    stamped = result["created_at"].item()
+    assert before <= stamped <= after
+
+
 def test_drop_pii_columns_removes_configured_columns_for_dim():
     df = pl.DataFrame(
         {
@@ -176,7 +184,7 @@ def test_build_dim_customers_dedupes_by_customer_id_keeping_first_row():
     assert kept_name == ["An (bản gốc)"]
 
 
-def test_build_dim_customers_drops_lineage_columns():
+def test_build_dim_customers_preserves_lineage_columns():
     df = pl.DataFrame(
         {
             "customer_id": ["CUS0001"],
@@ -188,9 +196,30 @@ def test_build_dim_customers_drops_lineage_columns():
 
     result = build_dim_customers(df)
 
-    assert "_source_file" not in result.columns
-    assert "_batch_id" not in result.columns
+    assert "_source_file" in result.columns
+    assert "_batch_id" in result.columns
     assert "customer_name" in result.columns
+
+    real_row = result.filter(pl.col("customer_id") == "CUS0001").row(0, named=True)
+    assert real_row["_source_file"] == "SRC03_customer_master.csv"
+    assert real_row["_batch_id"] == "batch-1"
+
+
+def test_build_dim_customers_unknown_member_has_null_lineage_not_the_string_unknown():
+    df = pl.DataFrame(
+        {
+            "customer_id": ["CUS0001"],
+            "customer_name": ["An"],
+            "_source_file": ["SRC03_customer_master.csv"],
+            "_batch_id": ["batch-1"],
+        }
+    )
+
+    result = build_dim_customers(df)
+
+    unknown_row = result.filter(pl.col("customer_key") == -1).row(0, named=True)
+    assert unknown_row["_source_file"] is None
+    assert unknown_row["_batch_id"] is None
 
 
 def test_build_dim_products_generates_1_based_surrogate_key_and_dedupes_by_product_id():
@@ -206,7 +235,7 @@ def test_build_dim_products_generates_1_based_surrogate_key_and_dedupes_by_produ
 
     assert result.height == 3
     assert result["product_key"].to_list() == [-1, 1, 2]
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     kept_name = result.filter(pl.col("product_id") == "PRD0001")["product_name"].to_list()
     assert kept_name == ["Sữa tươi (bản gốc)"]
 
@@ -224,7 +253,7 @@ def test_build_dim_distributors_generates_1_based_surrogate_key_and_dedupes_by_d
 
     assert result.height == 3
     assert result["distributor_key"].to_list() == [-1, 1, 2]
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     kept_name = result.filter(pl.col("distributor_id") == "DIST0001")["distributor_name"].to_list()
     assert kept_name == ["Kho A (bản gốc)"]
 
@@ -331,7 +360,10 @@ def test_build_dim_date_column_order_matches_erd():
 
     result = build_dim_date(df)
 
-    assert result.columns == ["date_key", "full_date", "year", "quarter", "month", "day"]
+    assert result.columns == [
+        "date_key", "full_date", "year", "quarter", "month", "day",
+        "created_at", "created_by", "updated_at", "updated_by",
+    ]
 
 
 def test_add_scd2_valid_dates_covers_middle_resigned_and_active_last_versions():
@@ -432,10 +464,13 @@ def test_build_dim_employees_chains_scd2_dates_flag_and_surrogate_key():
 
     result = build_dim_employees(df)
 
-    assert "_batch_id" not in result.columns
+    assert "_batch_id" in result.columns
     assert result.columns[0] == "employee_key"
     real_rows = result.filter(pl.col("employee_key") != -1)
     assert real_rows["employee_key"].to_list() == [1, 2, 3]
+
+    unknown_row = result.filter(pl.col("employee_key") == -1).row(0, named=True)
+    assert unknown_row["_batch_id"] is None
 
     rows = {(r["employee_id"], r["version"]): r for r in real_rows.to_dicts()}
     # EMP001 v1: không phải version cuối -> valid_to = effective_date của v2, không phải current
@@ -569,6 +604,42 @@ def test_build_fact_sales_resolves_all_fks_with_no_nulls():
     assert rows["O4"]["employee_key"] == -1  # EMP999 không tồn tại trong dim_employees
 
 
+def test_build_fact_distributor_orders_resolves_fks_no_nulls_no_fanout():
+    dim_distributors = build_dim_distributors(
+        pl.DataFrame({"distributor_id": ["DIST001", "DIST002"], "distributor_name": ["An Phu", "Binh Minh"]})
+    )
+    dim_products = build_dim_products(
+        pl.DataFrame({"product_id": ["PRD0001", "PRD0002"], "product_name": ["Sữa", "Bánh"]})
+    )
+    distributor_orders = pl.DataFrame(
+        {
+            "order_id": ["DORD001", "DORD002", "DORD003"],
+            "distributor_id": ["DIST001", "DIST002", "DIST999"],
+            "product_id": ["PRD0001", "PRD9999", "PRD0002"],
+            "fill_rate_pct": [95.0, 80.0, 100.0],
+            "ontime_delivery": ["Yes", "No", "Yes"],
+        }
+    )
+
+    result = build_fact_distributor_orders(distributor_orders, dim_distributors, dim_products)
+
+    assert result.height == distributor_orders.height
+    fk_cols = ["distributor_key", "product_key"]
+    assert result.select(fk_cols).null_count().sum_horizontal().sum() == 0
+
+    rows = {r["order_id"]: r for r in result.to_dicts()}
+    assert rows["DORD001"]["distributor_key"] == 1
+    assert rows["DORD001"]["product_key"] == 1
+    assert rows["DORD002"]["distributor_key"] == 2
+    assert rows["DORD002"]["product_key"] == -1  # PRD9999 không tồn tại
+    assert rows["DORD003"]["distributor_key"] == -1  # DIST999 không tồn tại
+    assert rows["DORD003"]["product_key"] == 2
+
+    # đo lường giữ nguyên, không bị join làm rớt
+    assert rows["DORD001"]["fill_rate_pct"] == 95.0
+    assert rows["DORD002"]["ontime_delivery"] == "No"
+
+
 def test_build_fact_targets_resolves_employee_key_keeps_year_month_no_date_key():
     dim_employees = build_dim_employees(
         pl.DataFrame(
@@ -657,3 +728,369 @@ def test_fact_sales_and_fact_targets_preserve_run_date_and_batch_id_lineage_cols
 
     assert "_run_date" in fact_targets.columns
     assert "_batch_id" in fact_targets.columns
+
+
+def test_build_dim_territory_generates_surrogate_key_and_unknown_member():
+    df = pl.DataFrame(
+        {
+            "territory_id": ["TER0001", "TER0002"],
+            "employee_id": ["EMP001", "EMP002"],
+            "customer_id": ["CUS0001", "CUS0002"],
+            "region": ["North", "South"],
+            "team": ["Team A", "Team B"],
+            "_batch_id": ["batch-1", "batch-1"],
+        }
+    )
+
+    result = build_dim_territory(df)
+
+    assert "_batch_id" in result.columns
+    assert result["territory_key"].to_list() == [-1, 1, 2]
+
+    unknown_rows = result.filter(pl.col("territory_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["territory_id"].to_list() == ["UNKNOWN"]
+    assert unknown_rows["_batch_id"].to_list() == [None]
+
+    real_row = result.filter(pl.col("territory_id") == "TER0001").row(0, named=True)
+    assert real_row["region"] == "North"
+    assert real_row["team"] == "Team A"
+
+
+def test_build_dim_promotion_generates_surrogate_key_and_unknown_member():
+    df = pl.DataFrame(
+        {
+            "promotion_id": ["PROMO0001", "PROMO0002"],
+            "promotion_name": ["Khuyến mãi hè", "Khuyến mãi Tết"],
+            "start_date": [date(2024, 6, 1), date(2024, 1, 1)],
+            "end_date": [date(2024, 6, 30), date(2024, 1, 31)],
+            "applicable_products": ["PRD0001,PRD0002", "PRD0003"],
+            "_batch_id": ["batch-1", "batch-1"],
+        }
+    )
+
+    result = build_dim_promotion(df)
+
+    assert "_batch_id" in result.columns
+    assert result["promotion_key"].to_list() == [-1, 1, 2]
+
+    unknown_rows = result.filter(pl.col("promotion_key") == -1)
+    assert unknown_rows.height == 1
+    assert unknown_rows["promotion_id"].to_list() == ["UNKNOWN"]
+    assert unknown_rows["_batch_id"].to_list() == [None]
+
+    real_row = result.filter(pl.col("promotion_id") == "PROMO0001").row(0, named=True)
+    assert real_row["start_date"] == date(2024, 6, 1)
+    assert real_row["end_date"] == date(2024, 6, 30)
+    assert real_row["applicable_products"] == "PRD0001,PRD0002"
+
+
+def test_build_fact_returns_resolves_all_fks_with_no_nulls_and_no_row_fanout():
+    dim_customers = build_dim_customers(
+        pl.DataFrame({"customer_id": ["CUS0001", "CUS0002"], "customer_name": ["An", "Binh"]})
+    )
+    dim_products = build_dim_products(
+        pl.DataFrame({"product_id": ["PRD0001", "PRD0002"], "product_name": ["Sữa", "Bánh"]})
+    )
+    dim_employees = build_dim_employees(
+        pl.DataFrame(
+            {
+                "employee_id": ["EMP001", "EMP001", "EMP002"],
+                "version": ["v1", "v2", "v1"],
+                "effective_date": [date(2024, 1, 1), date(2024, 6, 1), date(2024, 1, 1)],
+                "resign_date": [None, None, date(2024, 9, 30)],
+            }
+        )
+    )
+    returns = pl.DataFrame(
+        {
+            "return_id": ["R1", "R2", "R3", "R4"],
+            "return_date": [date(2024, 2, 1), date(2024, 7, 1), date(2024, 11, 1), date(2024, 3, 1)],
+            "customer_id": ["CUS0001", "CUS0002", "CUS9999", "CUS0001"],
+            "product_id": ["PRD0001", "PRD0002", "PRD0001", "PRD9999"],
+            "employee_id": ["EMP001", "EMP001", "EMP002", "EMP999"],
+            "return_amount": [50.0, 80.0, 20.0, 30.0],
+        }
+    )
+
+    result = build_fact_returns(returns, dim_customers, dim_products, dim_employees)
+
+    assert result.height == returns.height  # điểm quan trọng nhất: không fan-out
+
+    fk_cols = ["customer_key", "product_key", "employee_key"]
+    assert result.select(fk_cols).null_count().sum_horizontal().sum() == 0
+
+    rows = {r["return_id"]: r for r in result.to_dicts()}
+    assert rows["R1"]["customer_key"] == 1
+    assert rows["R1"]["product_key"] == 1
+    assert rows["R1"]["employee_key"] == 1  # EMP001 v1, còn hiệu lực tại 2024-02-01
+
+    assert rows["R2"]["employee_key"] == 2  # EMP001 v2 (đổi vùng), đúng version tại 2024-07-01
+
+    assert rows["R3"]["customer_key"] == -1  # CUS9999 không tồn tại
+    assert rows["R3"]["employee_key"] == -1  # EMP002 đã nghỉ trước 2024-11-01
+
+    assert rows["R4"]["product_key"] == -1  # PRD9999 không tồn tại
+    assert rows["R4"]["employee_key"] == -1  # EMP999 không tồn tại trong dim_employees
+
+
+def test_build_mart_sales_vs_target_aggregates_actual_and_target_by_region_year_month():
+    fact_sales = pl.DataFrame(
+        {
+            "order_id": ["O1", "O2", "O3", "O4"],
+            "region": ["MIỀN BẮC", "MIỀN BẮC", "MIỀN NAM", "MIỀN NAM"],
+            "order_year": ["2024", "2024", "2024", "2024"],
+            "order_month": ["1", "1", "1", "2"],
+            "net_amount": [100.0, 50.0, 200.0, 30.0],
+        }
+    )
+    fact_targets = pl.DataFrame(
+        {
+            "employee_id": ["EMP001", "EMP002", "EMP003"],
+            "region": ["MIỀN BẮC", "MIỀN BẮC", "MIỀN TRUNG"],
+            "year": ["2024", "2024", "2024"],
+            "month": ["1", "1", "1"],
+            "target_revenue": [120.0, 30.0, 500.0],
+        }
+    )
+
+    result = build_mart_sales_vs_target(fact_sales, fact_targets)
+
+    assert set(result.columns) == {"region", "year", "month", "actual_revenue", "target_revenue"}
+
+    rows = {(r["region"], r["year"], r["month"]): r for r in result.to_dicts()}
+
+    # MIỀN BẮC/2024/1: cả 2 phía đều có dữ liệu -> actual=150 (100+50), target=150 (120+30)
+    bac = rows[("MIỀN BẮC", "2024", "1")]
+    assert bac["actual_revenue"] == 150.0
+    assert bac["target_revenue"] == 150.0
+
+    # MIỀN NAM/2024/2: có sales, KHÔNG có target -> target_revenue NULL, không bị drop khỏi kết quả
+    nam_feb = rows[("MIỀN NAM", "2024", "2")]
+    assert nam_feb["actual_revenue"] == 30.0
+    assert nam_feb["target_revenue"] is None
+
+    # MIỀN TRUNG/2024/1: có target, KHÔNG có sales -> actual_revenue NULL, không bị drop khỏi kết quả
+    trung = rows[("MIỀN TRUNG", "2024", "1")]
+    assert trung["actual_revenue"] is None
+    assert trung["target_revenue"] == 500.0
+
+    assert result.height == 4
+
+
+def test_add_variance_pct_guards_zero_and_null_target_no_inf_no_crash():
+    mart = pl.DataFrame(
+        {
+            "region": ["MIỀN BẮC", "MIỀN NAM", "MIỀN TRUNG"],
+            "year": ["2024", "2024", "2024"],
+            "month": ["1", "1", "1"],
+            "actual_revenue": [150.0, 80.0, 30.0],
+            "target_revenue": [100.0, 0.0, None],
+        }
+    )
+
+    result = add_variance_pct(mart)
+
+    rows = {r["region"]: r for r in result.to_dicts()}
+
+    # trường hợp thường: (150-100)/100 = 0.5
+    assert rows["MIỀN BẮC"]["variance_pct"] == 0.5
+
+    # target_revenue = 0 -> NULL, không phải Inf
+    assert rows["MIỀN NAM"]["variance_pct"] is None
+
+    # target_revenue = NULL (chưa set target) -> NULL, không crash
+    assert rows["MIỀN TRUNG"]["variance_pct"] is None
+
+    # AC: không dòng nào Inf/NaN
+    variance_values = result["variance_pct"].drop_nulls().to_list()
+    assert all(v not in (float("inf"), float("-inf")) and v == v for v in variance_values)
+
+
+def test_get_gold_output_dir_strips_dashes_from_run_date(tmp_path):
+    out_dir = get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+    assert out_dir == os.path.join(str(tmp_path), "20260722")
+
+
+def test_get_gold_output_dir_creates_directory_on_disk(tmp_path):
+    out_dir = get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+    assert os.path.isdir(out_dir)
+
+
+def test_get_gold_output_dir_does_not_raise_when_directory_already_exists(tmp_path):
+    get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+    # must not raise on the second call even though the directory already exists
+    get_gold_output_dir("2026-07-22", gold_dir=str(tmp_path))
+
+
+def test_write_gold_parquet_creates_file_named_after_table(tmp_path):
+    df = pl.DataFrame({"customer_key": [-1, 1, 2]})
+
+    path = write_gold_parquet(df, "dim_customers", str(tmp_path))
+
+    assert path == os.path.join(str(tmp_path), "dim_customers.parquet")
+    assert os.path.exists(path)
+
+
+def test_write_gold_parquet_row_count_matches(tmp_path):
+    df = pl.DataFrame({"customer_key": [-1, 1, 2, 3]})
+
+    path = write_gold_parquet(df, "dim_customers", str(tmp_path))
+
+    assert pl.read_parquet(path).height == 4
+
+
+def _write_full_silver_fixture(silver_date_dir):
+    """Write one valid row per source, enough for run_gold_transform() to build all 12 tables."""
+    pl.DataFrame(
+        {
+            "order_id": ["O1"],
+            "order_date": [date(2024, 1, 15)],
+            "order_year": ["2024"],
+            "order_month": ["1"],
+            "region": ["MIỀN BẮC"],
+            "customer_id": ["CUS0001"],
+            "product_id": ["PRD0001"],
+            "employee_id": ["EMP001"],
+            "net_amount": [100.0],
+        }
+    ).write_parquet(silver_date_dir / "silver_sales_transactions.parquet")
+
+    pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "region": ["MIỀN BẮC"],
+            "year": ["2024"],
+            "month": ["1"],
+            "target_revenue": [90.0],
+        }
+    ).write_parquet(silver_date_dir / "silver_sales_target_plan.parquet")
+
+    pl.DataFrame({"customer_id": ["CUS0001"], "customer_name": ["An"]}).write_parquet(
+        silver_date_dir / "silver_customer_master.parquet"
+    )
+    pl.DataFrame({"product_id": ["PRD0001"], "product_name": ["Sữa"]}).write_parquet(
+        silver_date_dir / "silver_product_master.parquet"
+    )
+    pl.DataFrame(
+        {
+            "order_id": ["DORD001"],
+            "distributor_id": ["DIST0001"],
+            "product_id": ["PRD0001"],
+            "fill_rate_pct": [95.0],
+            "ontime_delivery": ["Yes"],
+        }
+    ).write_parquet(silver_date_dir / "silver_distributor_orders.parquet")
+    pl.DataFrame({"distributor_id": ["DIST0001"], "distributor_name": ["Kho A"]}).write_parquet(
+        silver_date_dir / "silver_distributor_master.parquet"
+    )
+    pl.DataFrame(
+        {
+            "employee_id": ["EMP001"],
+            "version": ["v1"],
+            "effective_date": [date(2024, 1, 1)],
+            "resign_date": [None],
+        }
+    ).write_parquet(silver_date_dir / "silver_employee_master.parquet")
+    pl.DataFrame({"territory_id": ["TER0001"]}).write_parquet(
+        silver_date_dir / "silver_territory_mapping.parquet"
+    )
+    pl.DataFrame(
+        {
+            "order_id": ["RET001"],
+            "customer_id": ["CUS0001"],
+            "product_id": ["PRD0001"],
+            "employee_id": ["EMP001"],
+            "return_date": [date(2024, 2, 1)],
+        }
+    ).write_parquet(silver_date_dir / "silver_return_transactions.parquet")
+    pl.DataFrame({"promotion_id": ["PROMO001"]}).write_parquet(
+        silver_date_dir / "silver_promotion_program.parquet"
+    )
+
+
+def test_run_gold_transform_writes_all_12_tables_with_valid_cross_table_fks(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)
+    _write_full_silver_fixture(silver_date_dir)
+
+    records = run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    assert len(records) == 12
+    assert all(r["status"] == "success" for r in records)
+
+    gold_date_dir = gold_dir / "20260804"
+    expected_tables = {
+        "dim_customers", "dim_products", "dim_distributors", "dim_date", "dim_territory",
+        "dim_promotion", "dim_employees", "fact_sales", "fact_targets", "fact_returns",
+        "fact_distributor_orders", "mart_sales_vs_target",
+    }
+    written = {f.stem for f in gold_date_dir.glob("*.parquet")}
+    assert written == expected_tables
+    assert os.path.exists(gold_date_dir / "gold_log.jsonl")
+
+    fact_sales = pl.read_parquet(gold_date_dir / "fact_sales.parquet")
+    dim_customers = pl.read_parquet(gold_date_dir / "dim_customers.parquet")
+    valid_customer_keys = set(dim_customers["customer_key"].to_list())
+    assert set(fact_sales["customer_key"].to_list()) <= valid_customer_keys
+
+    audit_cols = {"created_at", "created_by", "updated_at", "updated_by"}
+    dim_and_fact_tables = expected_tables - {"mart_sales_vs_target"}
+    for table_name in dim_and_fact_tables:
+        table = pl.read_parquet(gold_date_dir / f"{table_name}.parquet")
+        assert audit_cols <= set(table.columns), f"{table_name} missing audit columns"
+        assert table["created_by"].to_list() == ["gold_pipeline"] * table.height
+
+
+def test_run_gold_transform_success_writes_one_gold_log_row_per_table(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)
+    _write_full_silver_fixture(silver_date_dir)
+
+    run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    gold_log = pl.read_ndjson(gold_dir / "20260804" / "gold_log.jsonl")
+    assert gold_log.height == 12
+    assert set(gold_log["status"].to_list()) == {"success"}
+    assert gold_log["error_message"].null_count() == 12
+    assert gold_log["row_count"].min() > 0
+
+
+def test_run_gold_transform_failure_writes_single_gold_layer_log_row(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)  # no silver Parquet files written -> read() raises
+
+    records = run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    assert len(records) == 1
+    assert records[0]["status"] == "failed"
+
+    gold_log = pl.read_ndjson(gold_dir / "20260804" / "gold_log.jsonl")
+    assert gold_log.height == 1
+    assert gold_log["table_name"].item() == "gold_layer"
+    assert gold_log["status"].item() == "failed"
+    assert gold_log["row_count"].item() == 0
+    assert gold_log["error_message"].item() is not None
+
+
+def test_run_gold_transform_rerun_appends_gold_log_rows(tmp_path):
+    silver_dir = tmp_path / "silver"
+    gold_dir = tmp_path / "gold"
+    silver_date_dir = silver_dir / "20260804"
+    silver_date_dir.mkdir(parents=True)
+    _write_full_silver_fixture(silver_date_dir)
+
+    run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+    run_gold_transform("2026-08-04", silver_dir=str(silver_dir), gold_dir=str(gold_dir))
+
+    gold_log = pl.read_ndjson(gold_dir / "20260804" / "gold_log.jsonl")
+    assert gold_log.height == 24

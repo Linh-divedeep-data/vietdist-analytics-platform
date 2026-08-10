@@ -10,6 +10,7 @@ from config.sources import (
     MONEY_QTY_COLUMNS,
     REQUIRED_COLUMNS,
     TEXT_COLUMNS,
+    silver_file_name,
 )
 
 
@@ -105,6 +106,23 @@ def test_key_columns_include_customer_id_and_product_id_where_present():
     # Spot-check against VDAP-316's own example (customer_id/product_id NULL keys)
     assert "customer_id" in KEY_COLUMNS["SRC01_sales_transactions.csv"]
     assert "product_id" in KEY_COLUMNS["SRC01_sales_transactions.csv"]
+
+
+def test_silver_file_name_strips_src_prefix_and_extension():
+    assert silver_file_name("SRC01_sales_transactions.csv") == "silver_sales_transactions"
+
+
+def test_silver_file_name_handles_xlsx_extension():
+    assert silver_file_name("SRC04_product_master.xlsx") == "silver_product_master"
+
+
+def test_silver_file_name_handles_double_digit_src_prefix():
+    assert silver_file_name("SRC10_promotion_program.xlsx") == "silver_promotion_program"
+
+
+def test_silver_file_name_is_collision_free_across_all_sources():
+    names = [silver_file_name(f) for f in CSV_SOURCES + EXCEL_SOURCES]
+    assert len(names) == len(set(names))
 
 
 def test_sources_module_does_not_import_from_src():
