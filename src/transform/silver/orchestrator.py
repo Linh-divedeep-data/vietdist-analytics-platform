@@ -40,11 +40,10 @@ def run_silver_transform(
     """Run every canonical source through transform_source(), writing Silver Parquet.
     One failing source is logged and skipped, not fatal to the batch.
 
-    batch_id is optional (unlike run_bronze_ingestion, which requires it from
-    main.py): main.py does not pass one for the silver layer today, so a
-    fresh uuid4 is generated here when the caller doesn't supply one, purely
-    to stamp get_logger()'s log lines — it is never stored in the silver log
-    record itself (VDAP-419 schema deliberately excludes batch_id)."""
+    batch_id is optional, unlike run_bronze_ingestion where it's required: if the
+    caller omits it, a fresh uuid4 is generated here purely to stamp get_logger()'s
+    log lines — it is never stored in the silver log record itself (VDAP-419 schema
+    deliberately excludes batch_id)."""
     bronze_date_dir = os.path.join(bronze_dir, run_date.replace("-", ""))
     out_dir = get_silver_output_dir(run_date, silver_dir)
     logger = get_logger(batch_id or str(uuid.uuid4()))
