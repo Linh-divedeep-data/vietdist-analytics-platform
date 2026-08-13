@@ -54,7 +54,7 @@ def run_gold_transform(
 
     def read(source_file: str) -> pl.DataFrame:
         path = os.path.join(silver_source_dir, f"{silver_file_name(source_file)}.parquet")
-        return pl.read_parquet(path)
+        return pl.scan_parquet(path).collect()
 
     try:
         dim_customers = build_dim_customers(read("SRC03_customer_master.csv"))
