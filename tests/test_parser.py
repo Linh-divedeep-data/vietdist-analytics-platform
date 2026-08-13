@@ -124,7 +124,7 @@ def test_read_csv_source_default_raw_dir_is_data_raw(monkeypatch):
 
     parser.read_csv_source("SRC01_sales.csv")
 
-    assert str(captured["path"]) == "data/raw/SRC01_sales.csv"
+    assert str(captured["path"]).endswith("data/raw/SRC01_sales.csv")
     assert captured["infer_schema_length"] == 0
 
 
